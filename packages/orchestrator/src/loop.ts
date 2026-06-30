@@ -122,11 +122,15 @@ export async function classifyLoop() {
   const shortId = task.id.slice(0, 8)
   console.log(`[classify] claimed task ${shortId}`)
 
+  // Each clarification reply appends a "[clarification]:" marker and resets the task to draft,
+  // so this loop re-runs per round — the round number keeps dedupe keys from colliding across rounds.
+  const round = (task.rawInput.match(/\[clarification\]:/g) ?? []).length
+
   try {
     const [task_] = await db.select({ cancelRequestedAt: tasks.cancelRequestedAt }).from(tasks).where(eq(tasks.id, task.id))
     if (task_?.cancelRequestedAt) { await cancelTask(task.id); return }
 
-    await queueMessage(db, { chatId: task.telegramChatId, taskId: task.id, messageType: 'classifying', content: '🔍 Classifying...', dedupeKey: `task:${task.id}:classifying` })
+    await queueMessage(db, { chatId: task.telegramChatId, taskId: task.id, messageType: 'classifying', content: '🔍 Classifying...', dedupeKey: `task:${task.id}:classifying:${round}` })
 
     const activeProjects = await db.select().from(projects).where(eq(projects.active, true))
     const result = await classifyTask(task.id, task.rawInput, activeProjects)
@@ -173,7 +177,7 @@ export async function classifyLoop() {
         chatId: task.telegramChatId, taskId: task.id,
         messageType: 'clarification_needed',
         content: `❓ ${result.clarificationQuestion}`,
-        dedupeKey: `task:${task.id}:clarification`,
+        dedupeKey: `task:${task.id}:clarification:${round}`,
       })
     } else {
       await db.update(tasks).set({
