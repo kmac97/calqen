@@ -6,11 +6,13 @@ import {
   projects,
   taskPlans,
   approvals,
+  artifacts,
   telegramOutbox,
   telegramConversations,
   auditEvents,
   computeScopeHash,
   planHashPayload,
+  deletionHashPayload,
   createTaskSchema,
   createProjectSchema,
 } from '@calqen/shared'
@@ -117,14 +119,23 @@ botRouter.post('/tasks/:id/cancel', async (c) => {
 
   // If runner has it in_progress, set cancel_requested_at and let runner handle it
   if (task.status === 'in_progress') {
-    await db
-      .update(tasks)
-      .set({ cancelRequestedAt: sql`now()`, updatedAt: sql`now()` })
-      .where(eq(tasks.id, taskId))
-    await db.insert(auditEvents).values({
-      taskId,
-      eventType: 'task.cancel_requested',
-      payload: {},
+    await db.transaction(async (tx) => {
+      await tx
+        .update(tasks)
+        .set({ cancelRequestedAt: sql`now()`, updatedAt: sql`now()` })
+        .where(eq(tasks.id, taskId))
+      await tx.insert(auditEvents).values({
+        taskId,
+        eventType: 'task.cancel_requested',
+        payload: {},
+      })
+      await queueMessage(tx, {
+        chatId: task.telegramChatId,
+        taskId,
+        messageType: 'cancel_requested',
+        content: `⏳ Cancellation requested — ${task.title}`,
+        dedupeKey: `task:${taskId}:cancel_requested`,
+      })
     })
     return c.json({ ok: true }, 202)
   }
@@ -164,12 +175,23 @@ botRouter.post('/tasks/:id/approve', async (c) => {
 
   if (!approval) return c.json({ error: 'No pending approval for this task' }, 404)
 
-  const [plan] = await db.select().from(taskPlans).where(eq(taskPlans.taskId, taskId))
-  if (!plan) return c.json({ error: 'No plan found for this task' }, 404)
+  let currentHash: string
+  if (approval.type === 'deletion') {
+    // Deletion hash covers exact files + current artifact content
+    const [diffArtifact] = await db
+      .select({ content: artifacts.content })
+      .from(artifacts)
+      .where(and(eq(artifacts.taskId, taskId), eq(artifacts.type, 'diff')))
+    if (!diffArtifact) return c.json({ error: 'Diff artifact not found' }, 404)
+    currentHash = computeScopeHash(deletionHashPayload(approval.filesToDelete, diffArtifact.content))
+  } else {
+    const [plan] = await db.select().from(taskPlans).where(eq(taskPlans.taskId, taskId))
+    if (!plan) return c.json({ error: 'No plan found for this task' }, 404)
+    currentHash = computeScopeHash(planHashPayload(plan))
+  }
 
-  const currentHash = computeScopeHash(planHashPayload(plan))
   if (currentHash !== approval.scopeHash) {
-    return c.json({ error: 'Plan has changed since approval was requested' }, 409)
+    return c.json({ error: 'Scope has changed since approval was requested' }, 409)
   }
 
   await db.transaction(async (tx) => {
@@ -197,6 +219,14 @@ botRouter.post('/tasks/:id/approve', async (c) => {
       taskId,
       eventType: 'approval.resolved',
       payload: { approvalId: approval.id, type: approval.type, outcome: 'approved' },
+    })
+
+    await queueMessage(tx, {
+      chatId: task.telegramChatId,
+      taskId,
+      messageType: 'approved',
+      content: `✅ Approved — ${task.title}\nQueued for execution.`,
+      dedupeKey: `task:${taskId}:approved`,
     })
   })
 
@@ -330,12 +360,51 @@ botRouter.get('/bot/conversation/:chatId', async (c) => {
   return c.json({ conversation: conv ?? null })
 })
 
-// POST /api/bot/messages/:id/sent
+// POST /api/bot/messages/:id/sent — must include deliveryLeaseId to prevent stale ACKs
 botRouter.post('/bot/messages/:id/sent', async (c) => {
   const id = c.req.param('id')
+  const body = await c.req.json().catch(() => ({})) as { deliveryLeaseId?: unknown }
+  if (typeof body.deliveryLeaseId !== 'string') return c.json({ error: 'deliveryLeaseId required' }, 400)
+
   await db
     .update(telegramOutbox)
     .set({ status: 'sent', sentAt: sql`now()` })
-    .where(eq(telegramOutbox.id, id))
+    .where(and(eq(telegramOutbox.id, id), eq(telegramOutbox.deliveryLeaseId, body.deliveryLeaseId)))
+  return c.json({ ok: true })
+})
+
+// POST /api/bot/message — queue a simple one-off message (for bot command acks)
+botRouter.post('/bot/message', async (c) => {
+  const body = await c.req.json() as { chatId?: unknown; content?: unknown }
+  if (typeof body.chatId !== 'number' || typeof body.content !== 'string') {
+    return c.json({ error: 'chatId (number) and content (string) required' }, 400)
+  }
+  await queueMessage(db, {
+    chatId: body.chatId,
+    messageType: 'bot_ack',
+    content: body.content,
+  })
+  return c.json({ ok: true })
+})
+
+// POST /api/bot/tasks/:id/status-message — queue a task status summary
+botRouter.post('/bot/tasks/:id/status-message', async (c) => {
+  const taskId = c.req.param('id')
+  const body = await c.req.json().catch(() => ({})) as { chatId?: unknown }
+  const [task] = await db.select().from(tasks).where(eq(tasks.id, taskId))
+  if (!task) return c.json({ error: 'Not found' }, 404)
+
+  const chatId = typeof body.chatId === 'number' ? body.chatId : task.telegramChatId
+  const shortId = taskId.slice(0, 8)
+  const spent = Number(task.spentUsd).toFixed(4)
+
+  await queueMessage(db, {
+    chatId,
+    taskId,
+    messageType: 'status',
+    content: `📊 ${task.title}\nStatus: ${task.status}  |  Spent: $${spent}  |  ID: ${shortId}`,
+    dedupeKey: `task:${taskId}:status:${Date.now()}`,
+  })
+
   return c.json({ ok: true })
 })

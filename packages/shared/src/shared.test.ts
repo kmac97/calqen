@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { generateShortId } from './shortid.js'
 import { calculateCost } from './costs.js'
 import { redactSecrets, redactSecretsDeep } from './redact.js'
-import { computeScopeHash } from './hash.js'
+import { computeScopeHash, deletionHashPayload } from './hash.js'
+import { runnerDeletionDetectedSchema, runnerCompleteSchema } from './schemas/runner.js'
 
 describe('generateShortId', () => {
   it('returns an 8-char hex string', () => {
@@ -145,5 +146,79 @@ describe('computeScopeHash', () => {
     const h1 = computeScopeHash({ files: ['a', 'b'] })
     const h2 = computeScopeHash({ files: ['b', 'a'] })
     expect(h1).not.toBe(h2)
+  })
+})
+
+// Fix #4/5: runner schemas include builderOutput
+describe('runnerDeletionDetectedSchema', () => {
+  it('accepts builderOutput field', () => {
+    const valid = {
+      leaseId: '12345678-1234-4234-b234-123456789012',
+      files: ['src/old.ts'],
+      builderOutput: JSON.stringify({ filesChanged: [], filesCreated: [], filesModified: [], filesDeleted: ['src/old.ts'], diff: '' }),
+    }
+    expect(runnerDeletionDetectedSchema.safeParse(valid).success).toBe(true)
+  })
+
+  it('rejects missing builderOutput', () => {
+    const invalid = { leaseId: '12345678-1234-4234-b234-123456789012', files: ['src/old.ts'] }
+    expect(runnerDeletionDetectedSchema.safeParse(invalid).success).toBe(false)
+  })
+})
+
+describe('runnerCompleteSchema', () => {
+  it('accepts builderOutput field', () => {
+    const valid = {
+      leaseId: '12345678-1234-4234-b234-123456789012',
+      diffSummary: '1 file',
+      filesChanged: ['src/a.ts'],
+      filesCreated: [],
+      filesModified: ['src/a.ts'],
+      filesDeleted: [],
+      testOutput: 'all pass',
+      passed: true,
+      builderOutput: JSON.stringify({ filesChanged: ['src/a.ts'], filesCreated: [], filesModified: ['src/a.ts'], filesDeleted: [], diff: '---' }),
+    }
+    expect(runnerCompleteSchema.safeParse(valid).success).toBe(true)
+  })
+
+  it('rejects missing builderOutput', () => {
+    const invalid = {
+      leaseId: '12345678-1234-4234-b234-123456789012',
+      diffSummary: '1 file',
+      filesChanged: ['src/a.ts'],
+      filesCreated: [],
+      filesModified: [],
+      filesDeleted: [],
+      testOutput: 'all pass',
+      passed: true,
+    }
+    expect(runnerCompleteSchema.safeParse(invalid).success).toBe(false)
+  })
+})
+
+// Fix #6: deletion scope_hash is stable and file-order-independent
+describe('deletionHashPayload', () => {
+  it('sorts files so hash is stable regardless of input order', () => {
+    const h1 = computeScopeHash(deletionHashPayload(['b.ts', 'a.ts'], 'content'))
+    const h2 = computeScopeHash(deletionHashPayload(['a.ts', 'b.ts'], 'content'))
+    expect(h1).toBe(h2)
+  })
+
+  it('produces different hash for different artifact content', () => {
+    const h1 = computeScopeHash(deletionHashPayload(['a.ts'], 'content-v1'))
+    const h2 = computeScopeHash(deletionHashPayload(['a.ts'], 'content-v2'))
+    expect(h1).not.toBe(h2)
+  })
+
+  it('produces different hash for different file lists', () => {
+    const h1 = computeScopeHash(deletionHashPayload(['a.ts'], 'content'))
+    const h2 = computeScopeHash(deletionHashPayload(['b.ts'], 'content'))
+    expect(h1).not.toBe(h2)
+  })
+
+  it('returns a 64-char hex hash', () => {
+    const hash = computeScopeHash(deletionHashPayload(['src/x.ts'], 'some content'))
+    expect(hash).toMatch(/^[0-9a-f]{64}$/)
   })
 })

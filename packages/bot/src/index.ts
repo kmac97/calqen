@@ -15,7 +15,7 @@ bot.use(async (ctx, next) => {
   const userId = ctx.from?.id
   const chatId = ctx.chat?.id
   if (!userId || !chatId || !authorizedUserIds.includes(userId) || !authorizedChatIds.includes(chatId)) return
-  await next()
+  return await next()
 })
 
 function api(method: string, path: string, body?: unknown): Promise<Response> {
@@ -24,34 +24,33 @@ function api(method: string, path: string, body?: unknown): Promise<Response> {
   return fetch(`${API}${path}`, init)
 }
 
+// Queue a simple one-off message through the outbox
+async function queueMessage(chatId: number, content: string) {
+  await api('POST', '/api/bot/message', { chatId, content })
+}
+
 bot.command('approve', async (ctx) => {
   const taskId = ctx.match.trim()
-  if (!taskId) { await ctx.reply('Usage: /approve <taskId>'); return }
-  const res = await api('POST', `/api/tasks/${taskId}/approve`)
-  await ctx.reply(res.ok ? '✅ Approved' : `❌ Failed (${res.status})`)
+  if (!taskId) { await queueMessage(ctx.chat.id, 'Usage: /approve <taskId>'); return }
+  await api('POST', `/api/tasks/${taskId}/approve`)
 })
 
 bot.command('reject', async (ctx) => {
   const taskId = ctx.match.trim()
-  if (!taskId) { await ctx.reply('Usage: /reject <taskId>'); return }
-  const res = await api('POST', `/api/tasks/${taskId}/reject`)
-  await ctx.reply(res.ok ? '✅ Rejected' : `❌ Failed (${res.status})`)
+  if (!taskId) { await queueMessage(ctx.chat.id, 'Usage: /reject <taskId>'); return }
+  await api('POST', `/api/tasks/${taskId}/reject`)
 })
 
 bot.command('cancel', async (ctx) => {
   const taskId = ctx.match.trim()
-  if (!taskId) { await ctx.reply('Usage: /cancel <taskId>'); return }
-  const res = await api('POST', `/api/tasks/${taskId}/cancel`)
-  await ctx.reply(res.ok ? '🚫 Cancel requested' : `❌ Failed (${res.status})`)
+  if (!taskId) { await queueMessage(ctx.chat.id, 'Usage: /cancel <taskId>'); return }
+  await api('POST', `/api/tasks/${taskId}/cancel`)
 })
 
 bot.command('status', async (ctx) => {
   const taskId = ctx.match.trim()
-  if (!taskId) { await ctx.reply('Usage: /status <taskId>'); return }
-  const res = await api('GET', `/api/tasks/${taskId}`)
-  if (!res.ok) { await ctx.reply('❌ Not found'); return }
-  const body = await res.json() as { task: { status: string; title: string; spentUsd: string } }
-  await ctx.reply(`📊 ${body.task.title}\nStatus: ${body.task.status}\nSpent: $${body.task.spentUsd}`)
+  if (!taskId) { await queueMessage(ctx.chat.id, 'Usage: /status <taskId>'); return }
+  await api('POST', `/api/bot/tasks/${taskId}/status-message`, { chatId: ctx.chat.id })
 })
 
 bot.on('message:text', async (ctx) => {
@@ -85,6 +84,7 @@ async function pollOutbox() {
         chatId: number
         content: string
         replyToMessageId: number | null
+        deliveryLeaseId: string
       }>
     }
     for (const msg of body.messages) {
@@ -94,7 +94,7 @@ async function pollOutbox() {
         } else {
           await bot.api.sendMessage(msg.chatId, msg.content)
         }
-        await api('POST', `/api/bot/messages/${msg.id}/sent`)
+        await api('POST', `/api/bot/messages/${msg.id}/sent`, { deliveryLeaseId: msg.deliveryLeaseId })
       } catch (err) {
         console.error(`[outbox] failed to send ${msg.id}:`, err)
       }

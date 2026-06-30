@@ -20,6 +20,7 @@ export const runnerCompleteSchema = z.object({
   filesDeleted: z.array(z.string()),
   testOutput: z.string(),
   passed: z.boolean(),
+  builderOutput: z.string(), // JSON-stringified BuilderOutput — stored as diff artifact
 })
 
 export const runnerFailSchema = z.object({
@@ -31,7 +32,7 @@ export const runnerFailSchema = z.object({
 export const runnerDeletionDetectedSchema = z.object({
   leaseId: z.string().uuid(),
   files: z.array(z.string()),
-  diffContent: z.string(),
+  builderOutput: z.string(), // JSON-stringified BuilderOutput — stored as diff artifact
 })
 
 export const runnerProgressSchema = z.object({

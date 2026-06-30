@@ -11,7 +11,7 @@ export * from './types.js'
 // Utilities
 export { calculateCost, MODEL_COSTS } from './costs.js'
 export { redactSecrets, redactSecretsDeep } from './redact.js'
-export { computeScopeHash, planHashPayload } from './hash.js'
+export { computeScopeHash, planHashPayload, deletionHashPayload } from './hash.js'
 export { generateShortId } from './shortid.js'
 
 // Outbox helper
