@@ -93,11 +93,31 @@ All agents are invoked through the `runAgent` wrapper which handles logging, spe
 
 - **Provider:** `'firecrawl'`
 - **Summarisation model:** `CALQEN_FAST_MODEL`
-- **Max sources:** `CALQEN_MAX_RESEARCH_SOURCES`
+- **Max sources:** `CALQEN_MAX_RESEARCH_SOURCES` (default `5`)
+- **Input:** `goal`, plus the task's verbatim `rawInput`, `constraints`, and `acceptanceCriteria` — so the user's requested output structure reaches the prompt, not just a paraphrased goal.
+- **Structured output:** the model call uses the Anthropic SDK's native structured-output support (`zodOutputFormat(researchOutputSchema)` + `client.messages.parse(...)`), which constrains generation to the JSON schema derived from `researchOutputSchema` and throws on a response that doesn't validate. No regex extraction or free-text `JSON.parse` is used. An explicit `researchOutputSchema.parse(message.parsed_output)` is kept afterwards as a defense-in-depth validation layer in `research.ts` itself.
 - **Output:**
 ```typescript
 {
-  summary: string
+  executiveSummary: string
+  recommendations: Array<{
+    name: string
+    problemSolved: string
+    workflow: string
+    requiredTools: string[]
+    // Offer-specific — null for non-commercial/technical research
+    targetCustomer: string | null
+    setupPriceRangeGbp: string | null
+    monthlyRetainerRangeGbp: string | null
+    expectedValueOrRoi: string | null
+    pricingBasis: 'observed_market_range' | 'estimated_recommendation' | 'not_applicable'
+    easeToSellScore: number | null      // 1-10
+    profitPotentialScore: number | null // 1-10
+    fitForKaineScore: number | null     // 1-10
+    supportingSourceUrls: string[]      // must be a subset of sources[].url; required non-empty when pricingBasis is 'observed_market_range'
+  }>
+  fastestOfferToLaunch: string
+  assumptionsAndCaveats: string[]
   sources: Array<{
     url: string
     title: string
@@ -105,6 +125,7 @@ All agents are invoked through the `runAgent` wrapper which handles logging, spe
   }>
 }
 ```
+- `formatResearchMessages(taskTitle, result)` in `packages/orchestrator/src/agents/researchFormat.ts` is a pure function that turns this output into one or more Telegram message strings, each ≤ 4096 characters (Telegram's hard limit), labelled `(Part i/N)` only when more than one message is produced. `researchLoop` queues one outbox row per chunk (`task:{id}:completed:{i}`).
 
 ---
 

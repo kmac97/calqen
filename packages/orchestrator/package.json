@@ -12,5 +12,8 @@
     "@mendable/firecrawl-js": "latest",
     "drizzle-orm": "latest",
     "zod": "latest"
+  },
+  "devDependencies": {
+    "vitest": "^1"
   }
 }

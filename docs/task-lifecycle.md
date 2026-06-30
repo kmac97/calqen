@@ -48,7 +48,8 @@ draft
 | In progress | "⚙️ Building — [short-id]..." |
 | Deletion found | "🗑️ Deletion found — [short-id]..." with /approve /reject |
 | Unplanned path | "⚠️ Needs review — [title]..." |
-| Completed | "✅ Done — [title]..." |
+| Completed (research) | One or more "✅ Done — [title]" messages built by `formatResearchMessages` — includes executive summary, ranked recommendations (pricing/ROI/scores, each labelled with its `pricingBasis`), fastest-offer-to-launch, assumptions/caveats, and sources (title + url). Split into multiple outbox rows (`task:{id}:completed:{i}`) only when content exceeds Telegram's 4096-char limit. |
+| Completed (code task) | "✅ Done — [title]..." |
 | Failed | "❌ Failed — [title]..." |
 | Budget exceeded | "💸 Budget limit — [title]..." |
 | Runner disconnected | "⚠️ Runner disconnected — [title]..." |

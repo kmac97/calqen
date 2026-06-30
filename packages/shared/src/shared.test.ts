@@ -4,6 +4,7 @@ import { calculateCost } from './costs.js'
 import { redactSecrets, redactSecretsDeep } from './redact.js'
 import { computeScopeHash, deletionHashPayload } from './hash.js'
 import { runnerDeletionDetectedSchema, runnerCompleteSchema } from './schemas/runner.js'
+import { researchOutputSchema } from './schemas/agent.js'
 
 describe('generateShortId', () => {
   it('returns an 8-char hex string', () => {
@@ -220,5 +221,98 @@ describe('deletionHashPayload', () => {
   it('returns a 64-char hex hash', () => {
     const hash = computeScopeHash(deletionHashPayload(['src/x.ts'], 'some content'))
     expect(hash).toMatch(/^[0-9a-f]{64}$/)
+  })
+})
+
+describe('researchOutputSchema', () => {
+  const baseRecommendation = {
+    name: 'Bookkeeping automation',
+    problemSolved: 'Manual reconciliation',
+    workflow: 'Connect Xero, auto-categorise',
+    requiredTools: ['Xero'],
+    targetCustomer: null,
+    setupPriceRangeGbp: null,
+    monthlyRetainerRangeGbp: null,
+    expectedValueOrRoi: null,
+    pricingBasis: 'not_applicable' as const,
+    easeToSellScore: null,
+    profitPotentialScore: null,
+    fitForKaineScore: null,
+    supportingSourceUrls: [] as string[],
+  }
+
+  const baseOutput = {
+    executiveSummary: 'Summary',
+    recommendations: [baseRecommendation],
+    fastestOfferToLaunch: 'Bookkeeping automation',
+    assumptionsAndCaveats: [],
+    sources: [{ url: 'https://example.com/a', title: 'A', relevantExcerpt: 'excerpt' }],
+  }
+
+  it('accepts a valid payload with offer fields populated and a sourced pricing basis', () => {
+    const valid = {
+      ...baseOutput,
+      recommendations: [{
+        ...baseRecommendation,
+        targetCustomer: 'Solo electricians',
+        setupPriceRangeGbp: '£500–£1,500',
+        monthlyRetainerRangeGbp: '£100–£300',
+        expectedValueOrRoi: 'Saves ~5h/week',
+        pricingBasis: 'observed_market_range' as const,
+        easeToSellScore: 7,
+        profitPotentialScore: 8,
+        fitForKaineScore: 9,
+        supportingSourceUrls: ['https://example.com/a'],
+      }],
+    }
+    expect(researchOutputSchema.safeParse(valid).success).toBe(true)
+  })
+
+  it('accepts a valid payload with all seven offer fields null and pricingBasis not_applicable', () => {
+    expect(researchOutputSchema.safeParse(baseOutput).success).toBe(true)
+  })
+
+  it('accepts empty recommendations and sources arrays', () => {
+    expect(researchOutputSchema.safeParse({ ...baseOutput, recommendations: [], sources: [] }).success).toBe(true)
+  })
+
+  it('rejects a payload missing required top-level fields', () => {
+    const invalid = {
+      recommendations: baseOutput.recommendations,
+      fastestOfferToLaunch: baseOutput.fastestOfferToLaunch,
+      assumptionsAndCaveats: baseOutput.assumptionsAndCaveats,
+      sources: baseOutput.sources,
+    }
+    expect(researchOutputSchema.safeParse(invalid).success).toBe(false)
+  })
+
+  it('rejects an out-of-range score', () => {
+    const invalid = { ...baseOutput, recommendations: [{ ...baseRecommendation, easeToSellScore: 11 }] }
+    expect(researchOutputSchema.safeParse(invalid).success).toBe(false)
+  })
+
+  it('rejects a non-integer score', () => {
+    const invalid = { ...baseOutput, recommendations: [{ ...baseRecommendation, easeToSellScore: 5.5 }] }
+    expect(researchOutputSchema.safeParse(invalid).success).toBe(false)
+  })
+
+  it('rejects supportingSourceUrls containing a URL not present in sources', () => {
+    const invalid = {
+      ...baseOutput,
+      recommendations: [{
+        ...baseRecommendation,
+        pricingBasis: 'estimated_recommendation' as const,
+        supportingSourceUrls: ['https://not-in-sources.example.com'],
+      }],
+    }
+    expect(researchOutputSchema.safeParse(invalid).success).toBe(false)
+  })
+
+  it('rejects observed_market_range pricing with empty supportingSourceUrls', () => {
+    const invalid = {
+      ...baseOutput,
+      recommendations: [{ ...baseRecommendation, pricingBasis: 'observed_market_range' as const, supportingSourceUrls: [] }],
+    }
+    expect(researchOutputSchema.safeParse(invalid).success).toBe(false)
   })
 })

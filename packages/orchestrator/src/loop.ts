@@ -14,6 +14,7 @@ import {
 import { classifyTask, synthesisePlan } from './agents/classify.js'
 import { architectTask } from './agents/architect.js'
 import { researchTask } from './agents/research.js'
+import { formatResearchMessages } from './agents/researchFormat.js'
 import { CancelledError, BudgetExceededError } from './agents/runAgent.js'
 
 const POLL_MS = 5000
@@ -91,10 +92,17 @@ async function claimClassifiedOrchestrator() {
         id,
         title,
         goal,
+        raw_input AS "rawInput",
+        constraints,
+        acceptance_criteria AS "acceptanceCriteria",
         telegram_chat_id AS "telegramChatId",
         cancel_requested_at AS "cancelRequestedAt"
     `)
-    return Array.from(rows)[0] as { id: string; title: string; goal: string; telegramChatId: number; cancelRequestedAt: string | null } | undefined
+    return Array.from(rows)[0] as {
+      id: string; title: string; goal: string; rawInput: string
+      constraints: string[]; acceptanceCriteria: string[]
+      telegramChatId: number; cancelRequestedAt: string | null
+    } | undefined
   })
 }
 
@@ -293,7 +301,12 @@ export async function researchLoop() {
       dedupeKey: `task:${task.id}:in_progress`,
     })
 
-    const result = await researchTask(task.id, task.goal ?? task.title)
+    const result = await researchTask(task.id, {
+      goal: task.goal ?? task.title,
+      rawInput: task.rawInput,
+      constraints: task.constraints,
+      acceptanceCriteria: task.acceptanceCriteria,
+    })
 
     const [check] = await db.select({ cancelRequestedAt: tasks.cancelRequestedAt }).from(tasks).where(eq(tasks.id, task.id))
     if (check?.cancelRequestedAt) { await cancelTask(task.id); return }
@@ -303,7 +316,7 @@ export async function researchLoop() {
         taskId: task.id,
         type: 'research',
         content: JSON.stringify(result),
-        metadata: { sources: result.sources.length },
+        metadata: { sources: result.sources.length, recommendations: result.recommendations.length },
       })
 
       await tx.update(tasks).set({
@@ -316,12 +329,15 @@ export async function researchLoop() {
       await tx.insert(auditEvents).values({ taskId: task.id, eventType: 'task.status_changed', payload: { from: 'in_progress', to: 'completed' } })
     })
 
-    await queueMessage(db, {
-      chatId: task.telegramChatId, taskId: task.id,
-      messageType: 'completed',
-      content: `✅ Done — ${task.title}\n\n${result.summary}`,
-      dedupeKey: `task:${task.id}:completed`,
-    })
+    const messages = formatResearchMessages(task.title, result)
+    for (let i = 0; i < messages.length; i++) {
+      await queueMessage(db, {
+        chatId: task.telegramChatId, taskId: task.id,
+        messageType: 'completed',
+        content: messages[i]!,
+        dedupeKey: `task:${task.id}:completed:${i}`,
+      })
+    }
   } catch (err) {
     if (err instanceof CancelledError) { await cancelTask(task.id); return }
     if (err instanceof BudgetExceededError) {
