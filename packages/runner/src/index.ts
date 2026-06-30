@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync, existsSync } from 'fs'
-import type { BuilderOutput, Task, TaskPlanRow, Artifact } from '@calqen/shared'
+import type { BuilderOutput, Task, TaskPlanRow, Artifact, Project } from '@calqen/shared'
+import { projectSettingsSchema } from '@calqen/shared'
 import { createApi, type RunnerToken } from './api.js'
 import { runBuilder } from './agents/builder.js'
 import { runVerifier } from './agents/verifier.js'
@@ -11,7 +12,7 @@ const RUNNER_NAME = process.env['RUNNER_NAME'] ?? `runner-${process.platform}`
 const POLL_MS = 10000
 const HEARTBEAT_MS = 20000
 
-type PollTask = Task & { project: object | null; plan: TaskPlanRow | null; diffArtifact: Artifact | null }
+type PollTask = Task & { project: Project | null; plan: TaskPlanRow | null; diffArtifact: Artifact | null }
 
 async function register(): Promise<RunnerToken> {
   const res = await fetch(`${API_BASE}/api/runner/register`, {
@@ -82,12 +83,14 @@ async function executeTask(task: PollTask, api: ReturnType<typeof createApi>) {
     builderOutput = await runBuilder(plan?.filesAffected ?? [], task.goal ?? task.title)
     await api.progress(taskId, leaseId, 'build', `Build complete — ${builderOutput.filesChanged.length} file(s)`)
 
-    // Diff policy check
-    const policy = checkDiffPolicy(builderOutput, plan?.filesAffected ?? [])
+    // Diff policy check — include protected globs from project settings
+    const settingsParsed = projectSettingsSchema.safeParse(task.project?.settings ?? {})
+    const protectedPathGlobs = settingsParsed.success ? settingsParsed.data.protectedPathGlobs : []
+    const policy = checkDiffPolicy(builderOutput, plan?.filesAffected ?? [], protectedPathGlobs)
 
     if (policy.deletedFiles.length > 0) {
       console.log(`[runner] deletions detected in task ${shortId}: ${policy.deletedFiles.join(', ')}`)
-      await api.deletionDetected(taskId, leaseId, policy.deletedFiles, builderOutput.diff)
+      await api.deletionDetected(taskId, leaseId, policy.deletedFiles, JSON.stringify(builderOutput))
       return
     }
 
@@ -98,9 +101,23 @@ async function executeTask(task: PollTask, api: ReturnType<typeof createApi>) {
     }
   }
 
+  // Check cancel before verify
+  const preVerifyCancel = await api.cancelCheck(taskId)
+  if (preVerifyCancel.ok) {
+    const body = await preVerifyCancel.json() as { cancelRequested: boolean }
+    if (body.cancelRequested) { await api.fail(taskId, leaseId, 'cancelled_by_user'); return }
+  }
+
   // Verify stage
   await api.progress(taskId, leaseId, 'verify', 'Running verification')
   const verifyResult = await runVerifier(builderOutput.filesChanged, plan?.testPlan ?? '')
+
+  // Check cancel before complete
+  const preCompleteCancel = await api.cancelCheck(taskId)
+  if (preCompleteCancel.ok) {
+    const body = await preCompleteCancel.json() as { cancelRequested: boolean }
+    if (body.cancelRequested) { await api.fail(taskId, leaseId, 'cancelled_by_user'); return }
+  }
 
   await api.complete(taskId, leaseId, {
     diffSummary: `${builderOutput.filesChanged.length} files (mock dry-run)`,
@@ -110,6 +127,7 @@ async function executeTask(task: PollTask, api: ReturnType<typeof createApi>) {
     filesDeleted: builderOutput.filesDeleted,
     testOutput: verifyResult.testOutput,
     passed: verifyResult.passed,
+    builderOutput: JSON.stringify(builderOutput),
   })
 
   console.log(`[runner] task ${shortId} ${verifyResult.passed ? 'completed' : 'failed'}`)

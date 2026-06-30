@@ -131,6 +131,9 @@ export async function classifyLoop() {
     const activeProjects = await db.select().from(projects).where(eq(projects.active, true))
     const result = await classifyTask(task.id, task.rawInput, activeProjects)
 
+    // Enforce executionTarget server-side — research always → orchestrator, all else → runner
+    const executionTarget: 'orchestrator' | 'runner' = result.taskType === 'research' ? 'orchestrator' : 'runner'
+
     const projectId = result.projectName
       ? activeProjects.find((p) => p.name === result.projectName)?.id ?? null
       : null
@@ -142,7 +145,7 @@ export async function classifyLoop() {
           title: result.title,
           goal: result.goal,
           taskType: result.taskType,
-          executionTarget: result.executionTarget,
+          executionTarget,
           projectId: projectId ?? null,
           constraints: result.constraints,
           acceptanceCriteria: result.acceptanceCriteria,
@@ -178,7 +181,7 @@ export async function classifyLoop() {
         title: result.title,
         goal: result.goal,
         taskType: result.taskType,
-        executionTarget: result.executionTarget,
+        executionTarget,
         projectId: projectId ?? null,
         constraints: result.constraints,
         acceptanceCriteria: result.acceptanceCriteria,

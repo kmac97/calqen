@@ -19,7 +19,7 @@ import {
   runnerProgressSchema,
   redactSecrets,
   computeScopeHash,
-  planHashPayload,
+  deletionHashPayload,
 } from '@calqen/shared'
 import { registrationAuth } from '../middleware/registrationAuth.js'
 import { registrationRateLimit } from '../middleware/registrationRateLimit.js'
@@ -139,6 +139,17 @@ runnerRouter.post('/heartbeat', runnerAuth, async (c) => {
   return c.json({ ok: true })
 })
 
+// GET /api/runner/tasks/:id/cancel-check — fresh cancellation status for running task
+runnerRouter.get('/tasks/:id/cancel-check', runnerAuth, async (c) => {
+  const taskId = c.req.param('id')
+  const [task] = await db
+    .select({ cancelRequestedAt: tasks.cancelRequestedAt })
+    .from(tasks)
+    .where(eq(tasks.id, taskId))
+  if (!task) return c.json({ error: 'Not found' }, 404)
+  return c.json({ cancelRequested: task.cancelRequestedAt !== null })
+})
+
 // POST /api/runner/tasks/:id/progress
 runnerRouter.post('/tasks/:id/progress', runnerAuth, async (c) => {
   const taskId = c.req.param('id')
@@ -171,7 +182,7 @@ runnerRouter.post('/tasks/:id/deletion-detected', runnerAuth, async (c) => {
   const parsed = runnerDeletionDetectedSchema.safeParse(body)
   if (!parsed.success) return c.json({ error: 'Invalid request body' }, 400)
 
-  const { leaseId, files, diffContent } = parsed.data
+  const { leaseId, files, builderOutput: builderOutputJson } = parsed.data
 
   const [task] = await db
     .select({ leaseId: tasks.leaseId, telegramChatId: tasks.telegramChatId, title: tasks.title })
@@ -180,15 +191,15 @@ runnerRouter.post('/tasks/:id/deletion-detected', runnerAuth, async (c) => {
 
   if (!task || task.leaseId !== leaseId) return c.json({ error: 'Lease mismatch' }, 409)
 
-  const [plan] = await db.select().from(taskPlans).where(eq(taskPlans.taskId, taskId))
-  const scopeHash = plan ? computeScopeHash(planHashPayload(plan)) : ''
+  const artifactContent = redactSecrets(builderOutputJson)
+  const scopeHash = computeScopeHash(deletionHashPayload(files, artifactContent))
 
   await db.transaction(async (tx) => {
-    // Save diff artifact
+    // Save structured diff artifact (JSON-stringified BuilderOutput)
     await tx.insert(artifacts).values({
       taskId,
       type: 'diff',
-      content: redactSecrets(diffContent),
+      content: artifactContent,
       metadata: { filesDeleted: files },
     })
 
@@ -196,7 +207,7 @@ runnerRouter.post('/tasks/:id/deletion-detected', runnerAuth, async (c) => {
     await tx.insert(approvals).values({
       taskId,
       type: 'deletion',
-      planVersion: plan?.version ?? 1,
+      planVersion: 1,
       scopeHash,
       detail: `Deletion detected in ${files.length} file(s)`,
       filesToDelete: files,
@@ -241,7 +252,7 @@ runnerRouter.post('/tasks/:id/complete', runnerAuth, async (c) => {
   const parsed = runnerCompleteSchema.safeParse(body)
   if (!parsed.success) return c.json({ error: 'Invalid request body' }, 400)
 
-  const { leaseId, diffSummary, filesChanged, testOutput, passed } = parsed.data
+  const { leaseId, diffSummary, filesChanged, testOutput, passed, builderOutput: builderOutputJson } = parsed.data
 
   const [task] = await db
     .select({ leaseId: tasks.leaseId, telegramChatId: tasks.telegramChatId, title: tasks.title, spentUsd: tasks.spentUsd, budgetUsd: tasks.budgetUsd })
@@ -251,7 +262,15 @@ runnerRouter.post('/tasks/:id/complete', runnerAuth, async (c) => {
   if (!task || task.leaseId !== leaseId) return c.json({ error: 'Lease mismatch' }, 409)
 
   await db.transaction(async (tx) => {
-    await transition(tx, taskId, passed ? 'completed' : 'failed', 'runner_complete')
+    // Save structured diff artifact on all completion paths
+    await tx.insert(artifacts).values({
+      taskId,
+      type: 'diff',
+      content: redactSecrets(builderOutputJson),
+      metadata: { filesChanged },
+    })
+
+    const effectiveStatus = await transition(tx, taskId, passed ? 'completed' : 'failed', 'runner_complete')
 
     await tx
       .update(tasks)
@@ -265,7 +284,16 @@ runnerRouter.post('/tasks/:id/complete', runnerAuth, async (c) => {
 
     const shortId = taskId.slice(0, 8)
     const spent = Number(task.spentUsd).toFixed(4)
-    if (passed) {
+
+    if (effectiveStatus === 'cancelled') {
+      await queueMessage(tx, {
+        chatId: task.telegramChatId,
+        taskId,
+        messageType: 'cancelled',
+        content: `🚫 Cancelled — ${task.title}`,
+        dedupeKey: `task:${taskId}:cancelled`,
+      })
+    } else if (passed) {
       await queueMessage(tx, {
         chatId: task.telegramChatId,
         taskId,
@@ -285,7 +313,7 @@ runnerRouter.post('/tasks/:id/complete', runnerAuth, async (c) => {
 
     await tx.insert(auditEvents).values({
       taskId,
-      eventType: passed ? 'task.completed' : 'task.failed',
+      eventType: effectiveStatus === 'cancelled' ? 'task.cancelled' : passed ? 'task.completed' : 'task.failed',
       payload: { diffSummary, filesChanged: filesChanged.length, testOutput: redactSecrets(testOutput) },
     })
   })

@@ -1,4 +1,4 @@
-import { createHash } from 'crypto'
+import { createHash } from 'node:crypto'
 
 function sortKeysDeep(obj: unknown): unknown {
   if (Array.isArray(obj)) return obj.map(sortKeysDeep)
@@ -34,4 +34,12 @@ export function planHashPayload(plan: {
 export function computeScopeHash(plan: unknown): string {
   const canonical = JSON.stringify(sortKeysDeep(plan))
   return createHash('sha256').update(canonical).digest('hex')
+}
+
+// Payload for deletion approval scope_hash — covers exact files + artifact content
+export function deletionHashPayload(files: string[], artifactContent: string) {
+  return {
+    deletedFiles: [...files].sort(),
+    artifactContentHash: createHash('sha256').update(artifactContent).digest('hex'),
+  }
 }

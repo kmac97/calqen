@@ -22,14 +22,17 @@ export function createApi(token: RunnerToken, apiBase: string) {
   return {
     poll: () => call('GET', '/api/runner/poll'),
 
+    cancelCheck: (taskId: string) => call('GET', `/api/runner/tasks/${taskId}/cancel-check`),
+
     heartbeat: (leaseId: string) =>
       call('POST', '/api/runner/heartbeat', { runnerId, leaseId }),
 
     progress: (taskId: string, leaseId: string, stage: string, message?: string) =>
       call('POST', `/api/runner/tasks/${taskId}/progress`, { leaseId, stage, message }),
 
-    deletionDetected: (taskId: string, leaseId: string, files: string[], diffContent: string) =>
-      call('POST', `/api/runner/tasks/${taskId}/deletion-detected`, { leaseId, files, diffContent }),
+    // builderOutputJson: JSON.stringify(BuilderOutput) — stored as structured diff artifact
+    deletionDetected: (taskId: string, leaseId: string, files: string[], builderOutputJson: string) =>
+      call('POST', `/api/runner/tasks/${taskId}/deletion-detected`, { leaseId, files, builderOutput: builderOutputJson }),
 
     complete: (taskId: string, leaseId: string, params: {
       diffSummary: string
@@ -39,6 +42,7 @@ export function createApi(token: RunnerToken, apiBase: string) {
       filesDeleted: string[]
       testOutput: string
       passed: boolean
+      builderOutput: string // JSON-stringified BuilderOutput
     }) => call('POST', `/api/runner/tasks/${taskId}/complete`, { leaseId, ...params }),
 
     fail: (taskId: string, leaseId: string, reason: string, stage?: string) =>

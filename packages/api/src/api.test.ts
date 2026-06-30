@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { app } from './app.js'
-import { db, tasks, runners, taskPlans, approvals, computeScopeHash, planHashPayload } from '@calqen/shared'
+import { db, tasks, runners, taskPlans, approvals, artifacts, computeScopeHash, planHashPayload, deletionHashPayload } from '@calqen/shared'
 import { eq } from 'drizzle-orm'
 
 const BOT_TOKEN = process.env['CALQEN_BOT_SERVICE_TOKEN']!
@@ -85,6 +85,45 @@ describe('Registration rate limit', () => {
   })
 })
 
+// Fix #2: deliveryLeaseId required on /sent
+describe('POST /api/bot/messages/:id/sent', () => {
+  it('returns 401 without bot auth', async () => {
+    const res = await app.request('/api/bot/messages/fake-id/sent', { method: 'POST' })
+    expect(res.status).toBe(401)
+  })
+})
+
+// Fix #3: new bot endpoints exist and require auth
+describe('POST /api/bot/message', () => {
+  it('returns 401 without bot auth', async () => {
+    const res = await app.request('/api/bot/message', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chatId: 123, content: 'hi' }),
+    })
+    expect(res.status).toBe(401)
+  })
+})
+
+describe('POST /api/bot/tasks/:id/status-message', () => {
+  it('returns 401 without bot auth', async () => {
+    const res = await app.request('/api/bot/tasks/fake-id/status-message', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chatId: 123 }),
+    })
+    expect(res.status).toBe(401)
+  })
+})
+
+// Fix #8: cancel-check endpoint requires runner auth
+describe('GET /api/runner/tasks/:id/cancel-check', () => {
+  it('returns 401 without runner auth', async () => {
+    const res = await app.request('/api/runner/tasks/fake-id/cancel-check')
+    expect(res.status).toBe(401)
+  })
+})
+
 // ── Integration tests: require real DB ────────────────────────────────────
 
 describe.skipIf(!HAS_REAL_DB)('Registration (integration)', () => {
@@ -164,6 +203,96 @@ describe.skipIf(!HAS_REAL_DB)('/approve scope_hash verification (integration)', 
     // cleanup
     await db.delete(approvals).where(eq(approvals.taskId, task.id))
     await db.delete(taskPlans).where(eq(taskPlans.taskId, task.id))
+    await db.delete(tasks).where(eq(tasks.id, task.id))
+  })
+})
+
+// Fix #6: deletion approval uses deletion-specific scope_hash
+describe.skipIf(!HAS_REAL_DB)('/approve deletion scope_hash (integration)', () => {
+  it('returns 409 when deletion scope_hash does not match artifact+files', async () => {
+    const [task] = await db
+      .insert(tasks)
+      .values({
+        rawInput: 'deletion test task',
+        title: 'deletion test task',
+        telegramChatId: 0,
+        status: 'awaiting_approval',
+        taskType: 'feature',
+        executionTarget: 'runner',
+      })
+      .returning()
+
+    if (!task) throw new Error('task not created')
+
+    // Create diff artifact
+    const artifactContent = JSON.stringify({ filesChanged: [], filesCreated: [], filesModified: [], filesDeleted: ['src/old.ts'], diff: '' })
+    const [artifact] = await db
+      .insert(artifacts)
+      .values({ taskId: task.id, type: 'diff', content: artifactContent, metadata: { filesDeleted: ['src/old.ts'] } })
+      .returning()
+
+    if (!artifact) throw new Error('artifact not created')
+
+    // Create deletion approval with a WRONG scope_hash
+    await db.insert(approvals).values({
+      taskId: task.id,
+      type: 'deletion',
+      planVersion: 1,
+      scopeHash: 'deliberately-wrong-hash',
+      filesToDelete: ['src/old.ts'],
+    })
+
+    const res = await app.request(`/api/tasks/${task.id}/approve`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${BOT_TOKEN}` },
+    })
+    expect(res.status).toBe(409)
+
+    // cleanup
+    await db.delete(approvals).where(eq(approvals.taskId, task.id))
+    await db.delete(artifacts).where(eq(artifacts.taskId, task.id))
+    await db.delete(tasks).where(eq(tasks.id, task.id))
+  })
+
+  it('returns 200 when deletion scope_hash matches artifact+files', async () => {
+    const [task] = await db
+      .insert(tasks)
+      .values({
+        rawInput: 'deletion match test',
+        title: 'deletion match test',
+        telegramChatId: 0,
+        status: 'awaiting_approval',
+        taskType: 'feature',
+        executionTarget: 'runner',
+      })
+      .returning()
+
+    if (!task) throw new Error('task not created')
+
+    const artifactContent = JSON.stringify({ filesChanged: [], filesCreated: [], filesModified: [], filesDeleted: ['src/old.ts'], diff: '' })
+    await db
+      .insert(artifacts)
+      .values({ taskId: task.id, type: 'diff', content: artifactContent, metadata: { filesDeleted: ['src/old.ts'] } })
+
+    const correctHash = computeScopeHash(deletionHashPayload(['src/old.ts'], artifactContent))
+
+    await db.insert(approvals).values({
+      taskId: task.id,
+      type: 'deletion',
+      planVersion: 1,
+      scopeHash: correctHash,
+      filesToDelete: ['src/old.ts'],
+    })
+
+    const res = await app.request(`/api/tasks/${task.id}/approve`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${BOT_TOKEN}` },
+    })
+    expect(res.status).toBe(200)
+
+    // cleanup
+    await db.delete(approvals).where(eq(approvals.taskId, task.id))
+    await db.delete(artifacts).where(eq(artifacts.taskId, task.id))
     await db.delete(tasks).where(eq(tasks.id, task.id))
   })
 })

@@ -60,3 +60,85 @@ describe('checkDiffPolicy', () => {
     expect(result.clean).toBe(true)
   })
 })
+
+// Fix #9: protectedPathGlobs glob matching
+describe('checkDiffPolicy with protectedPathGlobs', () => {
+  it('blocks planned file matching protected glob', () => {
+    const result = checkDiffPolicy(
+      { filesDeleted: [], filesChanged: ['.github/workflows/ci.yml'] },
+      ['.github/workflows/ci.yml'],
+      ['.github/**'],
+    )
+    expect(result.clean).toBe(false)
+    expect(result.unplannedPaths).toContain('.github/workflows/ci.yml')
+  })
+
+  it('blocks file matching ** pattern', () => {
+    const result = checkDiffPolicy(
+      { filesDeleted: [], filesChanged: ['packages/shared/src/migrations/0001.sql'] },
+      ['packages/shared/src/migrations/0001.sql'],
+      ['**/migrations/**'],
+    )
+    expect(result.clean).toBe(false)
+    expect(result.unplannedPaths).toContain('packages/shared/src/migrations/0001.sql')
+  })
+
+  it('blocks exact filename match', () => {
+    const result = checkDiffPolicy(
+      { filesDeleted: [], filesChanged: ['Dockerfile'] },
+      ['Dockerfile'],
+      ['Dockerfile'],
+    )
+    expect(result.clean).toBe(false)
+    expect(result.unplannedPaths).toContain('Dockerfile')
+  })
+
+  it('blocks wildcard prefix pattern (.env*)', () => {
+    const result = checkDiffPolicy(
+      { filesDeleted: [], filesChanged: ['.env.local'] },
+      ['.env.local'],
+      ['.env*'],
+    )
+    expect(result.clean).toBe(false)
+    expect(result.unplannedPaths).toContain('.env.local')
+  })
+
+  it('blocks wildcard suffix pattern (*.config.ts)', () => {
+    const result = checkDiffPolicy(
+      { filesDeleted: [], filesChanged: ['vite.config.ts'] },
+      ['vite.config.ts'],
+      ['*.config.ts'],
+    )
+    expect(result.clean).toBe(false)
+    expect(result.unplannedPaths).toContain('vite.config.ts')
+  })
+
+  it('allows file not matching any glob', () => {
+    const result = checkDiffPolicy(
+      { filesDeleted: [], filesChanged: ['src/a.ts'] },
+      ['src/a.ts'],
+      ['.github/**', 'Dockerfile', '.env*'],
+    )
+    expect(result.clean).toBe(true)
+  })
+
+  it('empty protectedPathGlobs has no effect', () => {
+    const result = checkDiffPolicy(
+      { filesDeleted: [], filesChanged: ['src/a.ts'] },
+      ['src/a.ts'],
+      [],
+    )
+    expect(result.clean).toBe(true)
+  })
+
+  it('glob only blocks matching files, not all files', () => {
+    const result = checkDiffPolicy(
+      { filesDeleted: [], filesChanged: ['src/a.ts', '.github/workflows/ci.yml'] },
+      ['src/a.ts', '.github/workflows/ci.yml'],
+      ['.github/**'],
+    )
+    expect(result.clean).toBe(false)
+    expect(result.unplannedPaths).toEqual(['.github/workflows/ci.yml'])
+    // src/a.ts is allowed
+  })
+})
