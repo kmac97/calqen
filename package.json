@@ -1,0 +1,31 @@
+{
+  "name": "calqen",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "pnpm -r typecheck",
+    "lint": "eslint . --ext .ts --max-warnings 0",
+    "test": "vitest run",
+    "db:generate": "drizzle-kit generate --config=drizzle.config.ts",
+    "db:migrate": "tsx packages/shared/src/migrate.ts",
+    "db:seed": "tsx packages/shared/src/seed.ts",
+    "dev:api": "tsx packages/api/src/index.ts",
+    "dev:bot": "tsx packages/bot/src/index.ts",
+    "dev:orchestrator": "tsx packages/orchestrator/src/index.ts",
+    "dev:runner": "tsx packages/runner/src/index.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "drizzle-kit": "latest",
+    "@typescript-eslint/eslint-plugin": "latest",
+    "@typescript-eslint/parser": "latest",
+    "cross-env": "^7",
+    "eslint": "latest",
+    "typescript-eslint": "latest",
+    "prettier": "^3",
+    "tsx": "^4",
+    "typescript": "^5.4",
+    "vitest": "^1"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "@calqen/orchestrator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@calqen/shared": "workspace:*",
+    "@anthropic-ai/sdk": "latest",
+    "@mendable/firecrawl-js": "latest",
+    "drizzle-orm": "latest",
+    "zod": "latest"
+  }
+}

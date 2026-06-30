@@ -1,0 +1,22 @@
+{
+  "name": "@calqen/shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "drizzle-orm": "latest",
+    "postgres": "^3",
+    "zod": "latest"
+  },
+  "devDependencies": {
+    "drizzle-kit": "latest",
+    "vitest": "^1"
+  }
+}

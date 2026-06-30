@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment — never commit secrets
+.env
+.env.*
+!.env.example
+
+# Runner token — plaintext bearer token, never commit
+.runner-token
+
+# Editor
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# pnpm
+.pnpm-store/
