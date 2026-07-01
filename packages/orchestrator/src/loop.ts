@@ -114,9 +114,19 @@ type InFlightStatus = 'classifying' | 'planning' | 'in_progress'
 // Guarded on expectedStatus so a stale worker (its lease already expired and reassigned to a
 // different worker by the lease-expiry job) can't clobber a newer worker's state — the write
 // only takes effect if the task is still in the status this call believes it's in.
-async function failTask(taskId: string, expectedStatus: InFlightStatus, telegramChatId: number, reason: string, messageType: string, content: string) {
+//
+// targetStatus defaults to 'failed'; callers whose failure means "the system couldn't reliably
+// determine what this task is" (e.g. classification itself breaking) should pass
+// 'needs_human_review' instead — a distinct, already-existing terminal state (previously only
+// used by the Runner's deletion-review flow) so a broken classification never silently proceeds
+// as if it had succeeded with guessed/default values.
+async function failTask(
+  taskId: string, expectedStatus: InFlightStatus, telegramChatId: number,
+  reason: string, messageType: string, content: string,
+  targetStatus: 'failed' | 'needs_human_review' = 'failed',
+) {
   const updated = await db.update(tasks).set({
-    status: 'failed',
+    status: targetStatus,
     orchestratorLeaseId: null,
     orchestratorLeaseExpiresAt: null,
     updatedAt: sql`now()`,
@@ -127,7 +137,13 @@ async function failTask(taskId: string, expectedStatus: InFlightStatus, telegram
     return
   }
 
-  await db.insert(auditEvents).values({ taskId, eventType: 'task.failed', payload: { reason } })
+  // redactSecrets: reason is often String(err), which can echo raw provider/request details —
+  // never persist that unredacted, even into an audit payload nobody sees on Telegram.
+  await db.insert(auditEvents).values({
+    taskId,
+    eventType: targetStatus === 'needs_human_review' ? 'task.needs_human_review' : 'task.failed',
+    payload: { reason: redactSecrets(reason) },
+  })
   await queueMessage(db, { chatId: telegramChatId, taskId, messageType, content })
 }
 
@@ -248,7 +264,11 @@ export async function classifyLoop() {
   } catch (err) {
     if (err instanceof CancelledError) { await cancelTask(task.id, 'classifying'); return }
     console.error(`[classify] task ${shortId} failed:`, err)
-    await failTask(task.id, 'classifying', task.telegramChatId, String(err), 'failed', `❌ Failed to classify — ${shortId}`)
+    await failTask(
+      task.id, 'classifying', task.telegramChatId, String(err),
+      'needs_human_review', `🔎 Needs review — couldn't reliably classify this request (${shortId}). A human should take a look.`,
+      'needs_human_review',
+    )
   }
 }
 

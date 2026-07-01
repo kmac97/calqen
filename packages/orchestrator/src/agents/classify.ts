@@ -1,6 +1,8 @@
 import Anthropic from '@anthropic-ai/sdk'
+import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod'
 import { classificationOutputSchema, type ClassificationOutput, type Project } from '@calqen/shared'
-import { runAgent, type AgentResult } from './runAgent.js'
+import { runAgent, PartialUsageError, type AgentResult } from './runAgent.js'
+import { buildClassifyPrompt } from './classifyPrompt.js'
 
 const client = new Anthropic()
 const FAST_MODEL = process.env['CALQEN_FAST_MODEL'] ?? 'claude-haiku-4-5-20251001'
@@ -17,47 +19,36 @@ export async function classifyTask(
     provider: 'anthropic',
     isMock: false,
     fn: async (): Promise<AgentResult<ClassificationOutput>> => {
-      const projectList = projects.map((p) => `- ${p.name} (${p.githubRepo})`).join('\n') || '(none)'
-      const prompt = `You are Calqen, an AI orchestration system. Classify the user request below.
+      const prompt = buildClassifyPrompt(rawInput, projects)
 
-Available projects:
-${projectList}
+      // Single attempt, no retry loop — classification has been reliable and cheap all session.
+      // On any failure, PartialUsageError still bills whatever real attempt was made (usage is
+      // captured as soon as the API call returns, before the parse step that might throw), and
+      // classifyLoop's catch-all routes the task to needs_human_review rather than silently
+      // guessing a shape.
+      let inputTokens = 0
+      let outputTokens = 0
 
-User request: ${rawInput}
+      try {
+        const msg = await client.messages.create({
+          model: FAST_MODEL,
+          max_tokens: 2048,
+          messages: [{ role: 'user', content: prompt }],
+          output_config: { format: zodOutputFormat(classificationOutputSchema) },
+        })
 
-Respond with valid JSON only:
-{
-  "title": "short title max 80 chars",
-  "goal": "what the user wants",
-  "taskType": "feature" | "research" | "debug" | "review",
-  "executionTarget": "runner" (code changes) | "orchestrator" (research/review),
-  "projectName": "exact project name or null",
-  "projectRequired": true | false,
-  "clarificationQuestion": "question string if ambiguous else null",
-  "constraints": ["..."],
-  "acceptanceCriteria": ["..."],
-  "riskLevel": "low" | "medium" | "high",
-  "requiresApproval": true | false,
-  "isTechnicalComparison": true | false
-}
+        inputTokens = msg.usage.input_tokens
+        outputTokens = msg.usage.output_tokens
 
-isTechnicalComparison is true only when the request is fundamentally about comparing or choosing between software libraries, frameworks, APIs, or technical tools for a stack/implementation decision (e.g. "which charting library should I use"). It is false for commercial offer/business-idea research, current-events or regulatory research, and any non-technical-comparison request — including when taskType is not "research" at all.`
+        const block = msg.content.find((b) => b.type === 'text')
+        if (!block || block.type !== 'text') throw new Error('No text block in classify response')
 
-      const msg = await client.messages.create({
-        model: FAST_MODEL,
-        max_tokens: 1024,
-        messages: [{ role: 'user', content: prompt }],
-      })
+        const parsed = classificationOutputSchema.parse(JSON.parse(block.text))
 
-      const block = msg.content.find((b) => b.type === 'text')
-      if (!block || block.type !== 'text') throw new Error('No text block in classify response')
-
-      const match = block.text.match(/\{[\s\S]*\}/)
-      if (!match) throw new Error('No JSON in classify response')
-
-      const parsed = classificationOutputSchema.parse(JSON.parse(match[0]))
-
-      return { output: parsed, prompt, inputTokens: msg.usage.input_tokens, outputTokens: msg.usage.output_tokens, modelUsed: FAST_MODEL }
+        return { output: parsed, prompt, inputTokens, outputTokens, modelUsed: FAST_MODEL }
+      } catch (err) {
+        throw new PartialUsageError(err, { inputTokens, outputTokens, modelUsed: FAST_MODEL })
+      }
     },
   })
 }

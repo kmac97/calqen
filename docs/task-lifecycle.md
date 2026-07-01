@@ -7,6 +7,7 @@ draft
   └─► classifying              (orchestrator atomic claim)
         ├─► awaiting_clarification  (ambiguous project/intent)
         │     └─► classifying       (clarification reply processed)
+        ├─► needs_human_review      (classification itself failed — never a silent misclassification)
         └─► classified
               │
               ├─ [execution_target = orchestrator]   (research tasks)
@@ -48,6 +49,7 @@ draft
 | In progress | "⚙️ Building — [short-id]..." |
 | Deletion found | "🗑️ Deletion found — [short-id]..." with /approve /reject |
 | Unplanned path | "⚠️ Needs review — [title]..." |
+| Classification failed | "🔎 Needs review — couldn't reliably classify this request..." — `classifyLoop`'s catch-all routes straight to `needs_human_review`, not `failed`, so a broken classification call is never mistaken for a real (if generic) classification. |
 | Completed (research) | One or more "✅ Done — [title]" messages built by `formatResearchMessages` — includes executive summary, ranked recommendations (pricing/ROI/scores, each labelled with its `pricingBasis`), fastest-offer-to-launch, assumptions/caveats, and sources (title + url). Split into multiple outbox rows (`task:{id}:completed:{i}`) only when content exceeds Telegram's 4096-char limit. |
 | Completed (code task) | "✅ Done — [title]..." |
 | Failed | "❌ Failed — [title]..." |

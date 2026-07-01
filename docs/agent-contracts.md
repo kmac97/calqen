@@ -7,6 +7,8 @@ All agents are invoked through the `runAgent` wrapper which handles logging, spe
 ### classifyTask
 - **Model:** `CALQEN_FAST_MODEL`
 - **Input:** raw user message, list of known projects
+- **Structured output:** same approach as `research.ts` — `client.messages.create(...)` with `output_config: { format: zodOutputFormat(classificationOutputSchema) }`, then `classificationOutputSchema.parse(JSON.parse(...))` as an explicit defense-in-depth validation step. No regex extraction, no "respond with JSON only" reliance. The prompt is a pure, testable `buildClassifyPrompt()` in `packages/orchestrator/src/agents/classifyPrompt.ts`.
+- **Single attempt, no retry:** unlike `research.ts`, classification does not retry on failure — classification calls have been reliable and cheap in practice. On any failure (API error, parse failure, Zod rejection), `classifyTask` throws `PartialUsageError` (capturing whatever usage was returned before the failure, so the one real attempt is still billed), and `classifyLoop` (`packages/orchestrator/src/loop.ts`) routes the task straight to `needs_human_review` — a distinct, already-existing terminal status (previously only used by the Runner's deletion-review flow) — rather than the generic `failed` status or any guessed/default classification. This is what makes "never silently misclassify" true by construction: a broken classification call can never produce a task that looks classified.
 - **Output (Zod-validated):**
 ```typescript
 {
@@ -21,9 +23,11 @@ All agents are invoked through the `runAgent` wrapper which handles logging, spe
   acceptanceCriteria: string[]
   riskLevel: 'low' | 'medium' | 'high'
   requiresApproval: boolean
+  isTechnicalComparison: boolean   // selects technical vs commercial research mode — see ResearchAgent below
 }
 ```
 - Research tasks with `projectRequired: false` get `project_id = null`
+- `isTechnicalComparison` can't be persisted as a new `tasks.taskType` enum value without a migration, so `classifyLoop` threads it through via `TECHNICAL_COMPARISON_MARKER` in the existing `constraints[]` column instead (see "Technical comparison mode" under ResearchAgent below) — only on the final "classified" transition, not on an intermediate `awaiting_clarification` round.
 
 ### synthesisePlan
 - **Model:** `CALQEN_ORCHESTRATOR_MODEL`

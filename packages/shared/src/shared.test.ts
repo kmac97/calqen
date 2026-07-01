@@ -458,6 +458,31 @@ describe('classificationOutputSchema', () => {
   it('rejects a payload missing isTechnicalComparison', () => {
     expect(classificationOutputSchema.safeParse(baseClassification).success).toBe(false)
   })
+
+  it('accepts a non-null clarificationQuestion (unclear request → clarification required)', () => {
+    const valid = { ...baseClassification, clarificationQuestion: 'Which charting use case — journal analytics or live trading?', isTechnicalComparison: true }
+    expect(classificationOutputSchema.safeParse(valid).success).toBe(true)
+  })
+
+  it('rejects a payload missing a required field (simulates a truncated/malformed provider response)', () => {
+    const { title: _omit, ...invalid } = { ...baseClassification, isTechnicalComparison: false }
+    void _omit
+    expect(classificationOutputSchema.safeParse(invalid).success).toBe(false)
+  })
+
+  it('rejects an invalid taskType enum value (simulates a malformed provider response)', () => {
+    const invalid = { ...baseClassification, taskType: 'not_a_real_type', isTechnicalComparison: false }
+    expect(classificationOutputSchema.safeParse(invalid).success).toBe(false)
+  })
+
+  it('rejects a non-boolean isTechnicalComparison (simulates a malformed provider response)', () => {
+    const invalid = { ...baseClassification, isTechnicalComparison: 'true' }
+    expect(classificationOutputSchema.safeParse(invalid).success).toBe(false)
+  })
+
+  it('rejects raw, unparsed JSON.parse failures upstream of the schema (malformed JSON is never valid input)', () => {
+    expect(() => JSON.parse('{not valid json')).toThrow()
+  })
 })
 
 describe('technicalResearchOutputSchema / technicalResearchModelOutputSchema', () => {
