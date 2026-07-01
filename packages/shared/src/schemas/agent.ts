@@ -45,12 +45,14 @@ export const researchRecommendationSchema = z
     easeToSellScore: z.number().int().min(1).max(10).nullable(),
     profitPotentialScore: z.number().int().min(1).max(10).nullable(),
     fitForKaineScore: z.number().int().min(1).max(10).nullable(),
-    // Subset-of-top-level-sources is enforced by researchOutputSchema's refine below, not here.
-    supportingSourceUrls: z.array(z.string().url()),
+    // 0-based indices into the top-level sources[] array (validated by researchOutputSchema's refine
+    // below, not here) — indices instead of raw URL strings because the model reliably corrupts long
+    // URLs when re-citing the same one across multiple recommendations; small integers can't do that.
+    supportingSourceIndexes: z.array(z.number().int().min(0)),
   })
-  .refine((rec) => rec.pricingBasis !== 'observed_market_range' || rec.supportingSourceUrls.length > 0, {
-    message: 'observed_market_range pricing requires at least one supportingSourceUrls entry',
-    path: ['supportingSourceUrls'],
+  .refine((rec) => rec.pricingBasis !== 'observed_market_range' || rec.supportingSourceIndexes.length > 0, {
+    message: 'observed_market_range pricing requires at least one supportingSourceIndexes entry',
+    path: ['supportingSourceIndexes'],
   })
 
 export const researchOutputSchema = z
@@ -62,12 +64,9 @@ export const researchOutputSchema = z
     sources: z.array(researchSourceSchema),
   })
   .refine(
-    (out) => {
-      const sourceUrls = new Set(out.sources.map((s) => s.url))
-      return out.recommendations.every((r) => r.supportingSourceUrls.every((u) => sourceUrls.has(u)))
-    },
+    (out) => out.recommendations.every((r) => r.supportingSourceIndexes.every((i) => i < out.sources.length)),
     {
-      message: 'every supportingSourceUrls entry must match a url present in sources[]',
+      message: 'every supportingSourceIndexes entry must be a valid index into sources[]',
       path: ['recommendations'],
     },
   )

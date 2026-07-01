@@ -238,7 +238,7 @@ describe('researchOutputSchema', () => {
     easeToSellScore: null,
     profitPotentialScore: null,
     fitForKaineScore: null,
-    supportingSourceUrls: [] as string[],
+    supportingSourceIndexes: [] as number[],
   }
 
   const baseOutput = {
@@ -262,7 +262,7 @@ describe('researchOutputSchema', () => {
         easeToSellScore: 7,
         profitPotentialScore: 8,
         fitForKaineScore: 9,
-        supportingSourceUrls: ['https://example.com/a'],
+        supportingSourceIndexes: [0],
       }],
     }
     expect(researchOutputSchema.safeParse(valid).success).toBe(true)
@@ -296,22 +296,22 @@ describe('researchOutputSchema', () => {
     expect(researchOutputSchema.safeParse(invalid).success).toBe(false)
   })
 
-  it('rejects supportingSourceUrls containing a URL not present in sources', () => {
+  it('rejects supportingSourceIndexes containing an index out of range for sources', () => {
     const invalid = {
       ...baseOutput,
       recommendations: [{
         ...baseRecommendation,
         pricingBasis: 'estimated_recommendation' as const,
-        supportingSourceUrls: ['https://not-in-sources.example.com'],
+        supportingSourceIndexes: [5],
       }],
     }
     expect(researchOutputSchema.safeParse(invalid).success).toBe(false)
   })
 
-  it('rejects observed_market_range pricing with empty supportingSourceUrls', () => {
+  it('rejects observed_market_range pricing with empty supportingSourceIndexes', () => {
     const invalid = {
       ...baseOutput,
-      recommendations: [{ ...baseRecommendation, pricingBasis: 'observed_market_range' as const, supportingSourceUrls: [] }],
+      recommendations: [{ ...baseRecommendation, pricingBasis: 'observed_market_range' as const, supportingSourceIndexes: [] }],
     }
     expect(researchOutputSchema.safeParse(invalid).success).toBe(false)
   })

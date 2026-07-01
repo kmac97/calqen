@@ -107,7 +107,12 @@ async function claimClassifiedOrchestrator() {
 }
 
 async function failTask(taskId: string, telegramChatId: number, reason: string, messageType: string, content: string) {
-  await db.update(tasks).set({ status: 'failed', updatedAt: sql`now()` }).where(eq(tasks.id, taskId))
+  await db.update(tasks).set({
+    status: 'failed',
+    orchestratorLeaseId: null,
+    orchestratorLeaseExpiresAt: null,
+    updatedAt: sql`now()`,
+  }).where(eq(tasks.id, taskId))
   await db.insert(auditEvents).values({ taskId, eventType: 'task.failed', payload: { reason } })
   await queueMessage(db, { chatId: telegramChatId, taskId, messageType, content })
 }

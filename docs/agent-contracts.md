@@ -95,7 +95,7 @@ All agents are invoked through the `runAgent` wrapper which handles logging, spe
 - **Summarisation model:** `CALQEN_FAST_MODEL`
 - **Max sources:** `CALQEN_MAX_RESEARCH_SOURCES` (default `5`)
 - **Input:** `goal`, plus the task's verbatim `rawInput`, `constraints`, and `acceptanceCriteria` — so the user's requested output structure reaches the prompt, not just a paraphrased goal.
-- **Structured output:** the model call uses the Anthropic SDK's native structured-output support (`zodOutputFormat(researchOutputSchema)` + `client.messages.parse(...)`), which constrains generation to the JSON schema derived from `researchOutputSchema` and throws on a response that doesn't validate. No regex extraction or free-text `JSON.parse` is used. An explicit `researchOutputSchema.parse(message.parsed_output)` is kept afterwards as a defense-in-depth validation layer in `research.ts` itself.
+- **Structured output:** the model call uses the Anthropic SDK's native structured-output support (`zodOutputFormat(researchOutputSchema)` + `client.messages.parse(...)`), which constrains generation to the JSON schema derived from `researchOutputSchema` and throws on a response that doesn't validate. No regex extraction or free-text `JSON.parse` is used. An explicit `researchOutputSchema.parse(message.parsed_output)` is kept afterwards as a defense-in-depth validation layer in `research.ts` itself. On validation failure or truncated JSON, the call is retried up to `CALQEN_MAX_AGENT_RETRIES` times (default `2`) before the task fails.
 - **Output:**
 ```typescript
 {
@@ -114,7 +114,7 @@ All agents are invoked through the `runAgent` wrapper which handles logging, spe
     easeToSellScore: number | null      // 1-10
     profitPotentialScore: number | null // 1-10
     fitForKaineScore: number | null     // 1-10
-    supportingSourceUrls: string[]      // must be a subset of sources[].url; required non-empty when pricingBasis is 'observed_market_range'
+    supportingSourceIndexes: number[]   // 0-based indices into sources[]; required non-empty when pricingBasis is 'observed_market_range'
   }>
   fastestOfferToLaunch: string
   assumptionsAndCaveats: string[]
@@ -125,7 +125,8 @@ All agents are invoked through the `runAgent` wrapper which handles logging, spe
   }>
 }
 ```
-- `formatResearchMessages(taskTitle, result)` in `packages/orchestrator/src/agents/researchFormat.ts` is a pure function that turns this output into one or more Telegram message strings, each ≤ 4096 characters (Telegram's hard limit), labelled `(Part i/N)` only when more than one message is produced. `researchLoop` queues one outbox row per chunk (`task:{id}:completed:{i}`).
+- `supportingSourceIndexes` references sources by array index rather than repeating the URL string, because the fast model reliably corrupted long URLs (stray digits, mangled scheme) when the same source was cited by more than one recommendation — small integers can't get mangled that way. The prompt numbers each source `[0]`, `[1]`, ... and requires the model's returned `sources[]` to preserve that exact order/indexing.
+- `formatResearchMessages(taskTitle, result)` in `packages/orchestrator/src/agents/researchFormat.ts` is a pure function that turns this output into one or more Telegram message strings, each ≤ 4096 characters (Telegram's hard limit), labelled `(Part i/N)` only when more than one message is produced, resolving `supportingSourceIndexes` back to real URLs for display. `researchLoop` queues one outbox row per chunk (`task:{id}:completed:{i}`).
 
 ---
 

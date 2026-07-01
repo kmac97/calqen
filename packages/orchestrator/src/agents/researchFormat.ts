@@ -17,7 +17,7 @@ function pricingBasisLabel(basis: ResearchRecommendation['pricingBasis']): strin
   }
 }
 
-function renderRecommendation(rec: ResearchRecommendation, rank: number): string {
+function renderRecommendation(rec: ResearchRecommendation, rank: number, sources: ResearchOutput['sources']): string {
   const lines = [
     `${rank}. ${rec.name}`,
     `Problem solved: ${rec.problemSolved}`,
@@ -35,11 +35,8 @@ function renderRecommendation(rec: ResearchRecommendation, rank: number): string
 
   lines.push(pricingBasisLabel(rec.pricingBasis))
   if (rec.pricingBasis !== 'not_applicable') {
-    lines.push(
-      rec.supportingSourceUrls.length
-        ? `Supporting sources: ${rec.supportingSourceUrls.join(', ')}`
-        : 'Supporting sources: none — see assumptions & caveats',
-    )
+    const urls = rec.supportingSourceIndexes.map((i) => sources[i]?.url).filter((u): u is string => u !== undefined)
+    lines.push(urls.length ? `Supporting sources: ${urls.join(', ')}` : 'Supporting sources: none — see assumptions & caveats')
   }
 
   return lines.join('\n')
@@ -53,7 +50,7 @@ function renderSource(source: ResearchOutput['sources'][number], isFirst: boolea
 function buildBlocks(taskTitle: string, result: ResearchOutput): string[] {
   const blocks: string[] = [`✅ Done — ${taskTitle}\n\n${result.executiveSummary}`]
 
-  result.recommendations.forEach((rec, i) => blocks.push(renderRecommendation(rec, i + 1)))
+  result.recommendations.forEach((rec, i) => blocks.push(renderRecommendation(rec, i + 1, result.sources)))
 
   blocks.push(`🚀 Fastest to launch: ${result.fastestOfferToLaunch}`)
 

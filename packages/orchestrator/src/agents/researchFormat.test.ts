@@ -16,7 +16,7 @@ function recommendation(overrides: Partial<ResearchRecommendation> = {}): Resear
     easeToSellScore: null,
     profitPotentialScore: null,
     fitForKaineScore: null,
-    supportingSourceUrls: [],
+    supportingSourceIndexes: [],
     ...overrides,
   }
 }
@@ -56,7 +56,7 @@ describe('formatResearchMessages', () => {
           easeToSellScore: 7,
           profitPotentialScore: 8,
           fitForKaineScore: 9,
-          supportingSourceUrls: ['https://example.com/a'],
+          supportingSourceIndexes: [0],
         }),
       ],
     })
@@ -68,6 +68,7 @@ describe('formatResearchMessages', () => {
     expect(msg).toContain('7/10')
     expect(msg).toContain('8/10')
     expect(msg).toContain('9/10')
+    expect(msg).toContain('https://example.com/a')
   })
 
   it('never prints the literal string "null" when offer fields are all null', () => {
@@ -81,15 +82,15 @@ describe('formatResearchMessages', () => {
     ['not_applicable', 'Pricing basis: not applicable'],
   ] as const)('renders distinct label for pricingBasis=%s', (basis, expectedLabel) => {
     const result = researchOutput({
-      recommendations: [recommendation({ pricingBasis: basis, supportingSourceUrls: basis === 'observed_market_range' ? ['https://example.com/a'] : [] })],
+      recommendations: [recommendation({ pricingBasis: basis, supportingSourceIndexes: basis === 'observed_market_range' ? [0] : [] })],
     })
     const msg = formatResearchMessages('T', result)[0]!
     expect(msg).toContain(expectedLabel)
   })
 
-  it('shows "no supporting sources" wording when estimated with empty supportingSourceUrls', () => {
+  it('shows "no supporting sources" wording when estimated with empty supportingSourceIndexes', () => {
     const result = researchOutput({
-      recommendations: [recommendation({ pricingBasis: 'estimated_recommendation', supportingSourceUrls: [] })],
+      recommendations: [recommendation({ pricingBasis: 'estimated_recommendation', supportingSourceIndexes: [] })],
     })
     const msg = formatResearchMessages('T', result)[0]!
     expect(msg).toContain('Supporting sources: none — see assumptions & caveats')
@@ -99,6 +100,19 @@ describe('formatResearchMessages', () => {
     const result = researchOutput({ recommendations: [recommendation({ pricingBasis: 'not_applicable' })] })
     const msg = formatResearchMessages('T', result)[0]!
     expect(msg).not.toContain('Supporting sources:')
+  })
+
+  it('resolves supportingSourceIndexes to their actual source URLs', () => {
+    const result = researchOutput({
+      sources: [
+        { url: 'https://example.com/a', title: 'A', relevantExcerpt: 'a' },
+        { url: 'https://example.com/b', title: 'B', relevantExcerpt: 'b' },
+      ],
+      recommendations: [recommendation({ pricingBasis: 'observed_market_range', supportingSourceIndexes: [1] })],
+    })
+    const msg = formatResearchMessages('T', result)[0]!
+    expect(msg).toContain('Supporting sources: https://example.com/b')
+    expect(msg).not.toContain('Supporting sources: https://example.com/a')
   })
 
   it('handles empty recommendations and assumptionsAndCaveats without crashing or empty headers', () => {
@@ -120,7 +134,7 @@ describe('formatResearchMessages', () => {
         name: `Offer number ${i}`,
         workflow: 'X'.repeat(300),
         pricingBasis: 'observed_market_range',
-        supportingSourceUrls: ['https://example.com/a'],
+        supportingSourceIndexes: [0],
       }),
     )
     const result = researchOutput({ recommendations })

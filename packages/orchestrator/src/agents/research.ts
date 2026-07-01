@@ -30,7 +30,7 @@ export async function researchTask(taskId: string, context: ResearchContext): Pr
       }>
 
       const sourcesText = rawSources
-        .map((s) => `URL: ${s.url ?? ''}\nTitle: ${s.title ?? ''}\nExcerpt: ${s.description ?? ''}`.trim())
+        .map((s, i) => `[${i}] URL: ${s.url ?? ''}\nTitle: ${s.title ?? ''}\nExcerpt: ${s.description ?? ''}`.trim())
         .join('\n\n---\n\n')
 
       const prompt = `You are producing a structured research result for this Calqen task.
@@ -49,21 +49,20 @@ Rules:
 3. recommendations must be ranked best-first.
 4. Only populate targetCustomer, setupPriceRangeGbp, monthlyRetainerRangeGbp, expectedValueOrRoi, easeToSellScore, profitPotentialScore, fitForKaineScore when the research concerns a sellable offer or service. For purely technical/comparison research, set every one of those seven fields to null — do not guess values to fill them in.
 5. Clearly separate fact from estimate: only state a number, price, or projection as fact if it is directly present in the source material above. Anything you estimate, infer, or project must be phrased with an explicit qualifier such as "estimated" or "approx.", and listed in assumptionsAndCaveats explaining the basis for the estimate.
-6. pricingBasis per recommendation: use "observed_market_range" ONLY when the price/retainer/ROI figures are directly backed by the source material, and in that case supportingSourceUrls must include at least one matching URL from sources. Use "estimated_recommendation" when the figures are your own estimate (also note the estimate and its basis in assumptionsAndCaveats). Use "not_applicable" for non-commercial/technical research.
-7. supportingSourceUrls must only contain URLs that also appear in the sources array you return — never invent or reference a URL that isn't in sources. Each URL is its own separate array entry — never combine multiple URLs into a single string.
+6. pricingBasis per recommendation: use "observed_market_range" ONLY when the price/retainer/ROI figures are directly backed by the source material, and in that case supportingSourceIndexes must include at least one index from the source material. Use "estimated_recommendation" when the figures are your own estimate (also note the estimate and its basis in assumptionsAndCaveats). Use "not_applicable" for non-commercial/technical research.
+7. supportingSourceIndexes is an array of integers — each entry is the [N] index number of a source in the source material above (e.g. [0], [1]). Reference sources by their index number only; never write out the URL itself in this field, and never invent an index that isn't listed above.
 8. Do not name a specific company, course, programme, tool, or service unless it appears in the source material provided above with a URL. If you reference one, it must also appear in sources with a matching url/title.
 9. fastestOfferToLaunch: name the single fastest-to-launch recommendation and a one-line reason. If this research is not about sellable offers, write a short sentence stating that launch-speed ranking does not apply to this query.
-10. sources entries must be drawn only from the source material above — url and title verbatim, relevantExcerpt a direct quote or close paraphrase of the provided excerpt, never invented.`
+10. Your returned sources array must contain exactly the source material items above, in the same [N] order, starting at index 0 — this keeps supportingSourceIndexes valid. url and title verbatim, relevantExcerpt a direct quote or close paraphrase of the provided excerpt, never invented.`
 
-      // Occasional malformed fields (e.g. the model concatenating two URLs into one array entry)
-      // fail validation even though the rest of the response is good — retry generation rather
-      // than fail the whole task over one bad field.
+      // Retry generation rather than fail the whole task over one bad field (e.g. an out-of-range
+      // source index, or truncated JSON if the response ran long).
       let lastError: unknown
       for (let attempt = 1; attempt <= MAX_RETRIES + 1; attempt++) {
         try {
           const message = await client.messages.parse({
             model: FAST_MODEL,
-            max_tokens: 4096,
+            max_tokens: 8192,
             messages: [{ role: 'user', content: prompt }],
             output_config: { format: zodOutputFormat(researchOutputSchema) },
           })
