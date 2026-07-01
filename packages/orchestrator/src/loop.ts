@@ -1,4 +1,4 @@
-import { eq, sql } from 'drizzle-orm'
+import { and, eq, sql } from 'drizzle-orm'
 import {
   db,
   tasks,
@@ -8,8 +8,10 @@ import {
   artifacts,
   telegramConversations,
   auditEvents,
+  redactSecrets,
   redactSecretsDeep,
   queueMessage,
+  CLARIFICATION_MARKER,
 } from '@calqen/shared'
 import { classifyTask, synthesisePlan } from './agents/classify.js'
 import { architectTask } from './agents/architect.js'
@@ -106,25 +108,42 @@ async function claimClassifiedOrchestrator() {
   })
 }
 
-async function failTask(taskId: string, telegramChatId: number, reason: string, messageType: string, content: string) {
-  await db.update(tasks).set({
+type InFlightStatus = 'classifying' | 'planning' | 'in_progress'
+
+// Guarded on expectedStatus so a stale worker (its lease already expired and reassigned to a
+// different worker by the lease-expiry job) can't clobber a newer worker's state — the write
+// only takes effect if the task is still in the status this call believes it's in.
+async function failTask(taskId: string, expectedStatus: InFlightStatus, telegramChatId: number, reason: string, messageType: string, content: string) {
+  const updated = await db.update(tasks).set({
     status: 'failed',
     orchestratorLeaseId: null,
     orchestratorLeaseExpiresAt: null,
     updatedAt: sql`now()`,
-  }).where(eq(tasks.id, taskId))
+  }).where(and(eq(tasks.id, taskId), eq(tasks.status, expectedStatus))).returning({ id: tasks.id })
+
+  if (updated.length === 0) {
+    console.log(`[loop] skipped stale failure for task ${taskId.slice(0, 8)} — status changed externally`)
+    return
+  }
+
   await db.insert(auditEvents).values({ taskId, eventType: 'task.failed', payload: { reason } })
   await queueMessage(db, { chatId: telegramChatId, taskId, messageType, content })
 }
 
-async function cancelTask(taskId: string) {
-  await db.update(tasks).set({
+async function cancelTask(taskId: string, expectedStatus: InFlightStatus) {
+  const updated = await db.update(tasks).set({
     status: 'cancelled',
     cancelledAt: sql`now()`,
     orchestratorLeaseId: null,
     orchestratorLeaseExpiresAt: null,
     updatedAt: sql`now()`,
-  }).where(eq(tasks.id, taskId))
+  }).where(and(eq(tasks.id, taskId), eq(tasks.status, expectedStatus))).returning({ id: tasks.id })
+
+  if (updated.length === 0) {
+    console.log(`[loop] skipped stale cancellation for task ${taskId.slice(0, 8)} — status changed externally`)
+    return
+  }
+
   await db.insert(auditEvents).values({ taskId, eventType: 'task.cancelled', payload: { reason: 'cancel_requested' } })
 }
 
@@ -135,13 +154,13 @@ export async function classifyLoop() {
   const shortId = task.id.slice(0, 8)
   console.log(`[classify] claimed task ${shortId}`)
 
-  // Each clarification reply appends a "[clarification]:" marker and resets the task to draft,
+  // Each clarification reply appends a CLARIFICATION_MARKER and resets the task to draft,
   // so this loop re-runs per round — the round number keeps dedupe keys from colliding across rounds.
-  const round = (task.rawInput.match(/\[clarification\]:/g) ?? []).length
+  const round = task.rawInput.split(CLARIFICATION_MARKER).length - 1
 
   try {
     const [task_] = await db.select({ cancelRequestedAt: tasks.cancelRequestedAt }).from(tasks).where(eq(tasks.id, task.id))
-    if (task_?.cancelRequestedAt) { await cancelTask(task.id); return }
+    if (task_?.cancelRequestedAt) { await cancelTask(task.id, 'classifying'); return }
 
     await queueMessage(db, { chatId: task.telegramChatId, taskId: task.id, messageType: 'classifying', content: '🔍 Classifying...', dedupeKey: `task:${task.id}:classifying:${round}` })
 
@@ -156,8 +175,8 @@ export async function classifyLoop() {
       : null
 
     if (result.clarificationQuestion) {
-      await db.transaction(async (tx) => {
-        await tx.update(tasks).set({
+      const transitioned = await db.transaction(async (tx) => {
+        const updated = await tx.update(tasks).set({
           status: 'awaiting_clarification',
           title: result.title,
           goal: result.goal,
@@ -171,7 +190,9 @@ export async function classifyLoop() {
           orchestratorLeaseId: null,
           orchestratorLeaseExpiresAt: null,
           updatedAt: sql`now()`,
-        }).where(eq(tasks.id, task.id))
+        }).where(and(eq(tasks.id, task.id), eq(tasks.status, 'classifying'))).returning({ id: tasks.id })
+
+        if (updated.length === 0) return false
 
         await tx.insert(telegramConversations).values({
           chatId: task.telegramChatId,
@@ -184,7 +205,10 @@ export async function classifyLoop() {
         })
 
         await tx.insert(auditEvents).values({ taskId: task.id, eventType: 'task.status_changed', payload: { from: 'classifying', to: 'awaiting_clarification' } })
+        return true
       })
+
+      if (!transitioned) { console.log(`[loop] skipped stale classify->clarification for task ${shortId} — status changed externally`); return }
 
       await queueMessage(db, {
         chatId: task.telegramChatId, taskId: task.id,
@@ -193,7 +217,7 @@ export async function classifyLoop() {
         dedupeKey: `task:${task.id}:clarification:${round}`,
       })
     } else {
-      await db.update(tasks).set({
+      const updated = await db.update(tasks).set({
         status: 'classified',
         title: result.title,
         goal: result.goal,
@@ -207,14 +231,16 @@ export async function classifyLoop() {
         orchestratorLeaseId: null,
         orchestratorLeaseExpiresAt: null,
         updatedAt: sql`now()`,
-      }).where(eq(tasks.id, task.id))
+      }).where(and(eq(tasks.id, task.id), eq(tasks.status, 'classifying'))).returning({ id: tasks.id })
+
+      if (updated.length === 0) { console.log(`[loop] skipped stale classify->classified for task ${shortId} — status changed externally`); return }
 
       await db.insert(auditEvents).values({ taskId: task.id, eventType: 'task.status_changed', payload: { from: 'classifying', to: 'classified' } })
     }
   } catch (err) {
-    if (err instanceof CancelledError) { await cancelTask(task.id); return }
+    if (err instanceof CancelledError) { await cancelTask(task.id, 'classifying'); return }
     console.error(`[classify] task ${shortId} failed:`, err)
-    await failTask(task.id, task.telegramChatId, String(err), 'failed', `❌ Failed to classify — ${shortId}`)
+    await failTask(task.id, 'classifying', task.telegramChatId, String(err), 'failed', `❌ Failed to classify — ${shortId}`)
   }
 }
 
@@ -227,12 +253,12 @@ export async function planLoop() {
 
   try {
     const [task_] = await db.select({ cancelRequestedAt: tasks.cancelRequestedAt }).from(tasks).where(eq(tasks.id, task.id))
-    if (task_?.cancelRequestedAt) { await cancelTask(task.id); return }
+    if (task_?.cancelRequestedAt) { await cancelTask(task.id, 'planning'); return }
 
     const plan = await architectTask(task.id, task.goal ?? task.title)
 
     const [check] = await db.select({ cancelRequestedAt: tasks.cancelRequestedAt }).from(tasks).where(eq(tasks.id, task.id))
-    if (check?.cancelRequestedAt) { await cancelTask(task.id); return }
+    if (check?.cancelRequestedAt) { await cancelTask(task.id, 'planning'); return }
 
     const planMessage = await synthesisePlan(
       task.id,
@@ -241,7 +267,16 @@ export async function planLoop() {
       shortId,
     )
 
-    await db.transaction(async (tx) => {
+    const transitioned = await db.transaction(async (tx) => {
+      const updated = await tx.update(tasks).set({
+        status: 'awaiting_approval',
+        orchestratorLeaseId: null,
+        orchestratorLeaseExpiresAt: null,
+        updatedAt: sql`now()`,
+      }).where(and(eq(tasks.id, task.id), eq(tasks.status, 'planning'))).returning({ id: tasks.id })
+
+      if (updated.length === 0) return false
+
       await tx.insert(taskPlans).values({
         taskId: task.id,
         version: plan.version,
@@ -262,15 +297,11 @@ export async function planLoop() {
         detail: `Plan for: ${task.title}`,
       })
 
-      await tx.update(tasks).set({
-        status: 'awaiting_approval',
-        orchestratorLeaseId: null,
-        orchestratorLeaseExpiresAt: null,
-        updatedAt: sql`now()`,
-      }).where(eq(tasks.id, task.id))
-
       await tx.insert(auditEvents).values({ taskId: task.id, eventType: 'task.status_changed', payload: { from: 'planning', to: 'awaiting_approval' } })
+      return true
     })
+
+    if (!transitioned) { console.log(`[loop] skipped stale plan->awaiting_approval for task ${shortId} — status changed externally`); return }
 
     await queueMessage(db, {
       chatId: task.telegramChatId, taskId: task.id,
@@ -279,13 +310,13 @@ export async function planLoop() {
       dedupeKey: `task:${task.id}:plan_v${plan.version}`,
     })
   } catch (err) {
-    if (err instanceof CancelledError) { await cancelTask(task.id); return }
+    if (err instanceof CancelledError) { await cancelTask(task.id, 'planning'); return }
     if (err instanceof BudgetExceededError) {
-      await failTask(task.id, task.telegramChatId, String(err), 'budget_exceeded', `💸 Budget limit — ${task.title}`)
+      await failTask(task.id, 'planning', task.telegramChatId, String(err), 'budget_exceeded', `💸 Budget limit — ${task.title}`)
       return
     }
     console.error(`[plan] task ${shortId} failed:`, err)
-    await failTask(task.id, task.telegramChatId, String(err), 'failed', `❌ Failed to plan — ${shortId}`)
+    await failTask(task.id, 'planning', task.telegramChatId, String(err), 'failed', `❌ Failed to plan — ${shortId}`)
   }
 }
 
@@ -297,7 +328,7 @@ export async function researchLoop() {
   console.log(`[research] claimed task ${shortId}`)
 
   try {
-    if (task.cancelRequestedAt) { await cancelTask(task.id); return }
+    if (task.cancelRequestedAt) { await cancelTask(task.id, 'in_progress'); return }
 
     await queueMessage(db, {
       chatId: task.telegramChatId, taskId: task.id,
@@ -314,25 +345,30 @@ export async function researchLoop() {
     })
 
     const [check] = await db.select({ cancelRequestedAt: tasks.cancelRequestedAt }).from(tasks).where(eq(tasks.id, task.id))
-    if (check?.cancelRequestedAt) { await cancelTask(task.id); return }
+    if (check?.cancelRequestedAt) { await cancelTask(task.id, 'in_progress'); return }
 
-    await db.transaction(async (tx) => {
-      await tx.insert(artifacts).values({
-        taskId: task.id,
-        type: 'research',
-        content: JSON.stringify(result),
-        metadata: { sources: result.sources.length, recommendations: result.recommendations.length },
-      })
-
-      await tx.update(tasks).set({
+    const transitioned = await db.transaction(async (tx) => {
+      const updated = await tx.update(tasks).set({
         status: 'completed',
         orchestratorLeaseId: null,
         orchestratorLeaseExpiresAt: null,
         updatedAt: sql`now()`,
-      }).where(eq(tasks.id, task.id))
+      }).where(and(eq(tasks.id, task.id), eq(tasks.status, 'in_progress'))).returning({ id: tasks.id })
+
+      if (updated.length === 0) return false
+
+      await tx.insert(artifacts).values({
+        taskId: task.id,
+        type: 'research',
+        content: redactSecrets(JSON.stringify(result)),
+        metadata: { sources: result.sources.length, recommendations: result.recommendations.length },
+      })
 
       await tx.insert(auditEvents).values({ taskId: task.id, eventType: 'task.status_changed', payload: { from: 'in_progress', to: 'completed' } })
+      return true
     })
+
+    if (!transitioned) { console.log(`[loop] skipped stale research->completed for task ${shortId} — status changed externally`); return }
 
     const messages = formatResearchMessages(task.title, result)
     for (let i = 0; i < messages.length; i++) {
@@ -344,13 +380,13 @@ export async function researchLoop() {
       })
     }
   } catch (err) {
-    if (err instanceof CancelledError) { await cancelTask(task.id); return }
+    if (err instanceof CancelledError) { await cancelTask(task.id, 'in_progress'); return }
     if (err instanceof BudgetExceededError) {
-      await failTask(task.id, task.telegramChatId, String(err), 'budget_exceeded', `💸 Budget limit — ${task.title}`)
+      await failTask(task.id, 'in_progress', task.telegramChatId, String(err), 'budget_exceeded', `💸 Budget limit — ${task.title}`)
       return
     }
     console.error(`[research] task ${shortId} failed:`, err)
-    await failTask(task.id, task.telegramChatId, String(err), 'failed', `❌ Failed — ${task.title}`)
+    await failTask(task.id, 'in_progress', task.telegramChatId, String(err), 'failed', `❌ Failed — ${task.title}`)
   }
 }
 

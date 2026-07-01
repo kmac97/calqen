@@ -15,6 +15,7 @@ import {
   deletionHashPayload,
   createTaskSchema,
   createProjectSchema,
+  CLARIFICATION_MARKER,
 } from '@calqen/shared'
 import { botAuth } from '../middleware/botAuth.js'
 import { transition } from '../lib/transition.js'
@@ -87,7 +88,7 @@ botRouter.post('/tasks/:id/clarification', async (c) => {
     await tx
       .update(tasks)
       .set({
-        rawInput: `${task.rawInput}\n[clarification]: ${reply}`,
+        rawInput: `${task.rawInput}${CLARIFICATION_MARKER}${reply}`,
         status: 'draft',
         updatedAt: sql`now()`,
       })

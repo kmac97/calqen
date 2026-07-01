@@ -27,6 +27,22 @@ export class BudgetExceededError extends Error {
   constructor(taskId: string) { super(`Budget exceeded for task ${taskId}`) }
 }
 
+export interface PartialUsage {
+  inputTokens: number
+  outputTokens: number
+  modelUsed: string
+}
+
+// Thrown instead of a bare error when an agent made one or more real, billed model calls before
+// ultimately failing (e.g. a retry loop that exhausts all attempts) — lets runAgent still record
+// and bill the tokens that were actually spent, instead of silently dropping them from spent_usd.
+export class PartialUsageError extends Error {
+  constructor(public readonly originalError: unknown, public readonly usage: PartialUsage) {
+    super(originalError instanceof Error ? originalError.message : String(originalError))
+    this.name = 'PartialUsageError'
+  }
+}
+
 export async function runAgent<T>(params: {
   taskId: string
   agentType: AgentType
@@ -83,12 +99,26 @@ export async function runAgent<T>(params: {
 
     return result.output
   } catch (err) {
+    const usage = err instanceof PartialUsageError ? err.usage : null
+    const cost = !isMock && usage ? calculateCost(usage.modelUsed, usage.inputTokens, usage.outputTokens) : null
+
     await db.update(agentRuns).set({
       status: 'failed',
       error: err instanceof Error ? err.message : String(err),
+      inputTokens: usage?.inputTokens ?? null,
+      outputTokens: usage?.outputTokens ?? null,
+      costUsd: cost != null ? cost.toFixed(6) : null,
+      modelUsed: usage?.modelUsed ?? null,
       durationMs: Date.now() - t0,
       completedAt: sql`now()`,
     }).where(eq(agentRuns.id, run.id))
-    throw err
+
+    if (!isMock && cost != null) {
+      await db.execute(sql`UPDATE tasks SET spent_usd = spent_usd + ${cost.toFixed(6)}::numeric WHERE id = ${taskId}`)
+    }
+
+    // Unwrap so callers see the real error type (CancelledError, BudgetExceededError, ...) —
+    // PartialUsageError only exists to carry usage info through to this cost-accounting step.
+    throw err instanceof PartialUsageError ? err.originalError : err
   }
 }

@@ -72,6 +72,8 @@ If runner heartbeat stops for 60s:
 - Runner → `offline`
 - Outbox: `runner_disconnected` message
 
+The orchestrator's equivalent job (`orchestratorLeaseExpiry`, also 30s interval) resets any task with an expired `orchestrator_lease_id` back to `classified` (or `draft` if it was `classifying`) purely from lease state — it does not check whether the task has already reached a terminal status. Because a second worker can claim and even complete/fail a task before a first, now-stale worker's call finally resolves, every write that transitions a task to `completed`, `failed`, or `cancelled` (`failTask`/`cancelTask` in `packages/orchestrator/src/loop.ts`, plus each loop's own success-path update) is guarded with `WHERE status = <the in-flight status this call believes it's in>`, not just `WHERE id = taskId`. If the guard doesn't match (0 rows updated), the write is a no-op — no audit event, no outbox message — since a fresher worker's write already won. Any new code path that transitions a task to a terminal status must use the same guard, or it can silently clobber a newer worker's state.
+
 ## resume_stage
 
 Set to `'verify'` when a task is re-queued after deletion approval. Runner loads stored diff artifact from `artifacts` table and skips directly to VerifierAgent.

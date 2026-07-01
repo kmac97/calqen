@@ -1,13 +1,17 @@
+import { eq } from 'drizzle-orm'
 import Anthropic from '@anthropic-ai/sdk'
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod'
 import FirecrawlApp from '@mendable/firecrawl-js'
-import { researchOutputSchema, type ResearchOutput } from '@calqen/shared'
-import { runAgent, type AgentResult } from './runAgent.js'
+import { db, tasks, researchOutputSchema, type ResearchOutput } from '@calqen/shared'
+import { runAgent, CancelledError, PartialUsageError, type AgentResult } from './runAgent.js'
+import { envInt } from '../env.js'
 
 const client = new Anthropic()
 const FAST_MODEL = process.env['CALQEN_FAST_MODEL'] ?? 'claude-haiku-4-5-20251001'
-const MAX_SOURCES = parseInt(process.env['CALQEN_MAX_RESEARCH_SOURCES'] ?? '5', 10)
-const MAX_RETRIES = parseInt(process.env['CALQEN_MAX_AGENT_RETRIES'] ?? '2', 10)
+
+const MAX_SOURCES = envInt('CALQEN_MAX_RESEARCH_SOURCES', 5)
+const MAX_RETRIES = envInt('CALQEN_MAX_AGENT_RETRIES', 2)
+const RETRY_DELAY_MS = 1000
 
 export interface ResearchContext {
   goal: string
@@ -56,33 +60,65 @@ Rules:
 10. Your returned sources array must contain exactly the source material items above, in the same [N] order, starting at index 0 — this keeps supportingSourceIndexes valid. url and title verbatim, relevantExcerpt a direct quote or close paraphrase of the provided excerpt, never invented.`
 
       // Retry generation rather than fail the whole task over one bad field (e.g. an out-of-range
-      // source index, or truncated JSON if the response ran long).
+      // source index, or truncated JSON if the response ran long). Uses messages.create (not the
+      // .parse() convenience wrapper) so message.usage is available even when our own parse/validate
+      // step below throws, letting every real, billed attempt's tokens be counted toward spend.
       let lastError: unknown
+      let totalInputTokens = 0
+      let totalOutputTokens = 0
+
       for (let attempt = 1; attempt <= MAX_RETRIES + 1; attempt++) {
+        const [current] = await db.select({ cancelRequestedAt: tasks.cancelRequestedAt }).from(tasks).where(eq(tasks.id, taskId))
+        if (current?.cancelRequestedAt) {
+          throw new PartialUsageError(new CancelledError(taskId), {
+            inputTokens: totalInputTokens,
+            outputTokens: totalOutputTokens,
+            modelUsed: FAST_MODEL,
+          })
+        }
+
         try {
-          const message = await client.messages.parse({
+          const message = await client.messages.create({
             model: FAST_MODEL,
             max_tokens: 8192,
             messages: [{ role: 'user', content: prompt }],
             output_config: { format: zodOutputFormat(researchOutputSchema) },
           })
 
-          // message.parsed_output is already validated by zodOutputFormat's internal safeParse (throws on
-          // failure). This second explicit parse is the defense-in-depth layer living in our own code.
-          const parsed = researchOutputSchema.parse(message.parsed_output)
+          totalInputTokens += message.usage.input_tokens
+          totalOutputTokens += message.usage.output_tokens
+
+          const block = message.content.find((b) => b.type === 'text')
+          if (!block || block.type !== 'text') throw new Error('No text block in research response')
+
+          const parsed = researchOutputSchema.parse(JSON.parse(block.text))
+
+          // Trust our own scraped data over the model's transcription for url/title — the one
+          // thing that broke this earlier was relying on the model to copy long strings correctly.
+          parsed.sources.forEach((source, i) => {
+            const original = rawSources[i]
+            if (original?.url) source.url = original.url
+            if (original?.title) source.title = original.title
+          })
 
           return {
             output: parsed,
             prompt,
-            inputTokens: message.usage.input_tokens,
-            outputTokens: message.usage.output_tokens,
+            inputTokens: totalInputTokens,
+            outputTokens: totalOutputTokens,
             modelUsed: FAST_MODEL,
           }
         } catch (err) {
           lastError = err
+          if (attempt <= MAX_RETRIES) await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS * attempt))
         }
       }
-      throw lastError
+
+      throw new PartialUsageError(lastError, {
+        inputTokens: totalInputTokens,
+        outputTokens: totalOutputTokens,
+        modelUsed: FAST_MODEL,
+      })
     },
   })
 }

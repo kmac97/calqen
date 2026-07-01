@@ -15,7 +15,7 @@ export { computeScopeHash, planHashPayload, deletionHashPayload } from './hash.j
 export { generateShortId } from './shortid.js'
 
 // Outbox helper
-export { queueMessage } from './outbox.js'
+export { queueMessage, CLARIFICATION_MARKER } from './outbox.js'
 export type { OutboxParams } from './outbox.js'
 
 // Zod schemas
