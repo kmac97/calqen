@@ -102,16 +102,30 @@ All agents are invoked through the `runAgent` wrapper which handles logging, spe
 ```typescript
 {
   executiveSummary: string
+  // Always populated — states what the source set actually covers geographically, so
+  // UK/regional relevance is never silently implied when the evidence is really US/global.
+  sourceGeographyNote: string
   recommendations: Array<{
     name: string
     problemSolved: string
     workflow: string
     requiredTools: string[]
+    // How well-backed the recommendation itself is (source count/type/independence), not pricing-specific
+    evidenceStrength: 'high' | 'medium' | 'low' | 'estimate_only'
     // Offer-specific — null for non-commercial/technical research
     targetCustomer: string | null
     setupPriceRangeGbp: string | null
     monthlyRetainerRangeGbp: string | null
-    expectedValueOrRoi: string | null
+    roiModel: {
+      roiType: 'profit_roi' | 'revenue_uplift'
+      // Individually nullable — partial data doesn't force fabrication. The formatter only
+      // computes a numeric ROI% when all four are present; otherwise shows calculationNote alone.
+      extraLeadsOrBookingsPerMonth: number | null
+      conversionRatePercent: number | null       // 0-100
+      avgValuePerConvertedJobGbp: number | null   // gross profit/job if profit_roi, revenue/job if revenue_uplift
+      monthlyCostGbp: number | null
+      calculationNote: string
+    } | null
     pricingBasis: 'observed_market_range' | 'estimated_recommendation' | 'not_applicable'
     easeToSellScore: number | null      // 1-10
     profitPotentialScore: number | null // 1-10
@@ -124,10 +138,14 @@ All agents are invoked through the `runAgent` wrapper which handles logging, spe
     url: string
     title: string
     relevantExcerpt: string
+    sourceType: 'official_vendor' | 'independent_research' | 'government_or_trade_body' | 'marketplace_or_review' | 'consultancy_or_agency' | 'video_or_social'
   }>
 }
 ```
+- A recommendation cannot have `evidenceStrength: 'estimate_only'` and `pricingBasis: 'observed_market_range'` at the same time (schema refine) — an estimate-only recommendation can't simultaneously claim sourced-market pricing.
+- `roiModel`'s ROI% is **computed by the formatter, not the model** — `packages/orchestrator/src/agents/researchFormat.ts` calculates `(extraLeadsOrBookingsPerMonth × conversionRatePercent/100 × avgValuePerConvertedJobGbp − monthlyCostGbp) / monthlyCostGbp` itself from the four numbers and labels it by `roiType`, so profit-vs-revenue framing and the formula can't be skipped or fudged by the model. Falls back to `calculationNote` alone when any number is null or `monthlyCostGbp` is `0`.
 - `supportingSourceIndexes` references sources by array index rather than repeating the URL string, because the fast model reliably corrupted long URLs (stray digits, mangled scheme) when the same source was cited by more than one recommendation — small integers can't get mangled that way. The prompt numbers each source `[0]`, `[1]`, ... and requires the model's returned `sources[]` to preserve that exact order/indexing.
+- The prompt (extracted to a pure, testable `buildResearchPrompt()` in `packages/orchestrator/src/agents/researchPrompt.ts`) also requires: inline `[N]` citation or an explicit "(estimated)" marker for every quantified claim in prose; classifying every source into exactly one `sourceType`; and checking recommendations for material overlap before finalizing, merging them or explicitly distinguishing them rather than listing near-duplicates.
 - `formatResearchMessages(taskTitle, result)` in `packages/orchestrator/src/agents/researchFormat.ts` is a pure function that turns this output into one or more Telegram message strings, each ≤ 4096 characters (Telegram's hard limit), labelled `(Part i/N)` only when more than one message is produced, resolving `supportingSourceIndexes` back to real URLs for display. `researchLoop` queues one outbox row per chunk (`task:{id}:completed:{i}`).
 
 ---

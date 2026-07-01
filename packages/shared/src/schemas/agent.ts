@@ -18,10 +18,20 @@ export const verifierOutputSchema = z.object({
 
 export type VerifierOutput = z.infer<typeof verifierOutputSchema>
 
+export const sourceTypeSchema = z.enum([
+  'official_vendor',
+  'independent_research',
+  'government_or_trade_body',
+  'marketplace_or_review',
+  'consultancy_or_agency',
+  'video_or_social',
+])
+
 export const researchSourceSchema = z.object({
   url: z.string(),
   title: z.string(),
   relevantExcerpt: z.string(),
+  sourceType: sourceTypeSchema,
 })
 
 export const pricingBasisSchema = z.enum([
@@ -30,17 +40,34 @@ export const pricingBasisSchema = z.enum([
   'not_applicable',
 ])
 
+export const evidenceStrengthSchema = z.enum(['high', 'medium', 'low', 'estimate_only'])
+
+export const roiTypeSchema = z.enum(['profit_roi', 'revenue_uplift'])
+
+export const roiModelSchema = z.object({
+  roiType: roiTypeSchema,
+  // Individually nullable so partial data doesn't pressure fabrication — the formatter only
+  // computes a numeric ROI% when all four are present; otherwise it shows calculationNote alone.
+  extraLeadsOrBookingsPerMonth: z.number().nonnegative().nullable(),
+  conversionRatePercent: z.number().min(0).max(100).nullable(),
+  // Gross profit per job if roiType is profit_roi, revenue per job if roiType is revenue_uplift.
+  avgValuePerConvertedJobGbp: z.number().nonnegative().nullable(),
+  monthlyCostGbp: z.number().nonnegative().nullable(),
+  calculationNote: z.string(),
+}).nullable()
+
 export const researchRecommendationSchema = z
   .object({
     name: z.string(),
     problemSolved: z.string(),
     workflow: z.string(),
     requiredTools: z.array(z.string()),
+    evidenceStrength: evidenceStrengthSchema,
     // Offer-specific — null for non-commercial/technical research
     targetCustomer: z.string().nullable(),
     setupPriceRangeGbp: z.string().nullable(),
     monthlyRetainerRangeGbp: z.string().nullable(),
-    expectedValueOrRoi: z.string().nullable(),
+    roiModel: roiModelSchema,
     pricingBasis: pricingBasisSchema,
     easeToSellScore: z.number().int().min(1).max(10).nullable(),
     profitPotentialScore: z.number().int().min(1).max(10).nullable(),
@@ -54,10 +81,17 @@ export const researchRecommendationSchema = z
     message: 'observed_market_range pricing requires at least one supportingSourceIndexes entry',
     path: ['supportingSourceIndexes'],
   })
+  .refine((rec) => rec.evidenceStrength !== 'estimate_only' || rec.pricingBasis !== 'observed_market_range', {
+    message: 'estimate_only evidence strength cannot pair with observed_market_range pricing',
+    path: ['evidenceStrength'],
+  })
 
 export const researchOutputSchema = z
   .object({
     executiveSummary: z.string(),
+    // Explicit statement of what the source set actually covers geographically, so UK/regional
+    // relevance is never silently implied when the evidence is really US/global.
+    sourceGeographyNote: z.string(),
     recommendations: z.array(researchRecommendationSchema),
     fastestOfferToLaunch: z.string(),
     assumptionsAndCaveats: z.array(z.string()),
@@ -74,3 +108,4 @@ export const researchOutputSchema = z
 export type ResearchSource = z.infer<typeof researchSourceSchema>
 export type ResearchRecommendation = z.infer<typeof researchRecommendationSchema>
 export type ResearchOutput = z.infer<typeof researchOutputSchema>
+export type RoiModel = NonNullable<ResearchRecommendation['roiModel']>

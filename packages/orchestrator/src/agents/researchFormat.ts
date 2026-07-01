@@ -1,4 +1,4 @@
-import type { ResearchOutput, ResearchRecommendation } from '@calqen/shared'
+import type { ResearchOutput, ResearchRecommendation, RoiModel } from '@calqen/shared'
 
 export const TELEGRAM_MAX_MESSAGE_LENGTH = 4096
 
@@ -17,9 +17,55 @@ function pricingBasisLabel(basis: ResearchRecommendation['pricingBasis']): strin
   }
 }
 
+function evidenceStrengthLabel(strength: ResearchRecommendation['evidenceStrength']): string {
+  switch (strength) {
+    case 'high':
+      return 'Evidence: 🟢 High'
+    case 'medium':
+      return 'Evidence: 🟡 Medium'
+    case 'low':
+      return 'Evidence: 🟠 Low'
+    case 'estimate_only':
+      return 'Evidence: ⚪ Estimate only'
+  }
+}
+
+function sourceTypeLabel(type: ResearchOutput['sources'][number]['sourceType']): string {
+  switch (type) {
+    case 'official_vendor':
+      return '🏢 Official vendor'
+    case 'independent_research':
+      return '🔬 Independent research'
+    case 'government_or_trade_body':
+      return '🏛️ Government/trade body'
+    case 'marketplace_or_review':
+      return '🛒 Marketplace/review'
+    case 'consultancy_or_agency':
+      return '🤝 Consultancy/agency'
+    case 'video_or_social':
+      return '📹 Video/social'
+  }
+}
+
+// The model provides the inputs, but never trust its arithmetic — compute the ROI figure
+// ourselves so profit-vs-revenue framing and the formula can't be silently fudged.
+function renderRoiModel(roi: RoiModel): string {
+  const label = roi.roiType === 'profit_roi' ? '📈 Profit ROI' : '📈 Revenue uplift'
+  const { extraLeadsOrBookingsPerMonth: leads, conversionRatePercent: rate, avgValuePerConvertedJobGbp: value, monthlyCostGbp: cost } = roi
+
+  if (leads !== null && rate !== null && value !== null && cost !== null && cost > 0) {
+    const netMonthly = leads * (rate / 100) * value - cost
+    const roiPercent = (netMonthly / cost) * 100
+    return `${label}: ~${roiPercent.toFixed(0)}%/month (${leads} leads × ${rate}% × £${value} − £${cost} cost)\n${roi.calculationNote}`
+  }
+
+  return `${label}: ${roi.calculationNote}`
+}
+
 function renderRecommendation(rec: ResearchRecommendation, rank: number, sources: ResearchOutput['sources']): string {
   const lines = [
     `${rank}. ${rec.name}`,
+    evidenceStrengthLabel(rec.evidenceStrength),
     `Problem solved: ${rec.problemSolved}`,
     `Workflow: ${rec.workflow}`,
     `Tools: ${rec.requiredTools.length ? rec.requiredTools.join(', ') : '—'}`,
@@ -28,7 +74,7 @@ function renderRecommendation(rec: ResearchRecommendation, rank: number, sources
   if (rec.targetCustomer !== null) lines.push(`Target customer: ${rec.targetCustomer}`)
   if (rec.setupPriceRangeGbp !== null) lines.push(`Setup price: ${rec.setupPriceRangeGbp}`)
   if (rec.monthlyRetainerRangeGbp !== null) lines.push(`Monthly retainer: ${rec.monthlyRetainerRangeGbp}`)
-  if (rec.expectedValueOrRoi !== null) lines.push(`Expected value/ROI: ${rec.expectedValueOrRoi}`)
+  if (rec.roiModel !== null) lines.push(renderRoiModel(rec.roiModel))
   if (rec.easeToSellScore !== null) lines.push(`Ease to sell: ${rec.easeToSellScore}/10`)
   if (rec.profitPotentialScore !== null) lines.push(`Profit potential: ${rec.profitPotentialScore}/10`)
   if (rec.fitForKaineScore !== null) lines.push(`Fit for Kaine: ${rec.fitForKaineScore}/10`)
@@ -43,12 +89,12 @@ function renderRecommendation(rec: ResearchRecommendation, rank: number, sources
 }
 
 function renderSource(source: ResearchOutput['sources'][number], isFirst: boolean): string {
-  const body = `• ${source.title}\n  ${source.url}\n  "${source.relevantExcerpt}"`
+  const body = `• ${source.title} — ${sourceTypeLabel(source.sourceType)}\n  ${source.url}\n  "${source.relevantExcerpt}"`
   return isFirst ? `📚 Sources:\n${body}` : body
 }
 
 function buildBlocks(taskTitle: string, result: ResearchOutput): string[] {
-  const blocks: string[] = [`✅ Done — ${taskTitle}\n\n${result.executiveSummary}`]
+  const blocks: string[] = [`✅ Done — ${taskTitle}\n\n${result.executiveSummary}\n\n🌍 ${result.sourceGeographyNote}`]
 
   result.recommendations.forEach((rec, i) => blocks.push(renderRecommendation(rec, i + 1, result.sources)))
 

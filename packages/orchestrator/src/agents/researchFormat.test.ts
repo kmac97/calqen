@@ -1,6 +1,18 @@
 import { describe, it, expect } from 'vitest'
-import type { ResearchOutput, ResearchRecommendation } from '@calqen/shared'
+import type { ResearchOutput, ResearchRecommendation, RoiModel } from '@calqen/shared'
 import { formatResearchMessages, TELEGRAM_MAX_MESSAGE_LENGTH } from './researchFormat.js'
+
+function roiModel(overrides: Partial<NonNullable<RoiModel>> = {}): NonNullable<RoiModel> {
+  return {
+    roiType: 'profit_roi',
+    extraLeadsOrBookingsPerMonth: null,
+    conversionRatePercent: null,
+    avgValuePerConvertedJobGbp: null,
+    monthlyCostGbp: null,
+    calculationNote: 'No sourced figures available for this estimate.',
+    ...overrides,
+  }
+}
 
 function recommendation(overrides: Partial<ResearchRecommendation> = {}): ResearchRecommendation {
   return {
@@ -8,10 +20,11 @@ function recommendation(overrides: Partial<ResearchRecommendation> = {}): Resear
     problemSolved: 'Manual invoice reconciliation',
     workflow: 'Connect Xero, auto-categorise, weekly client report',
     requiredTools: ['Xero', 'Zapier'],
+    evidenceStrength: 'medium',
     targetCustomer: null,
     setupPriceRangeGbp: null,
     monthlyRetainerRangeGbp: null,
-    expectedValueOrRoi: null,
+    roiModel: null,
     pricingBasis: 'not_applicable',
     easeToSellScore: null,
     profitPotentialScore: null,
@@ -24,21 +37,23 @@ function recommendation(overrides: Partial<ResearchRecommendation> = {}): Resear
 function researchOutput(overrides: Partial<ResearchOutput> = {}): ResearchOutput {
   return {
     executiveSummary: 'Three viable offers found for solo trades businesses.',
+    sourceGeographyNote: 'All sources are UK trade/industry sites.',
     recommendations: [recommendation()],
     fastestOfferToLaunch: 'Bookkeeping automation — can ship in a week.',
     assumptionsAndCaveats: ['Pricing assumes UK solo-trader market'],
-    sources: [{ url: 'https://example.com/a', title: 'Example Source', relevantExcerpt: 'Some excerpt text.' }],
+    sources: [{ url: 'https://example.com/a', title: 'Example Source', relevantExcerpt: 'Some excerpt text.', sourceType: 'independent_research' }],
     ...overrides,
   }
 }
 
 describe('formatResearchMessages', () => {
-  it('returns a single message with title, summary, recommendation, and sources', () => {
+  it('returns a single message with title, summary, geography note, recommendation, and sources', () => {
     const messages = formatResearchMessages('Find side-hustle ideas', researchOutput())
     expect(messages).toHaveLength(1)
     const msg = messages[0]!
     expect(msg).toContain('Find side-hustle ideas')
     expect(msg).toContain('Three viable offers found')
+    expect(msg).toContain('All sources are UK trade/industry sites.')
     expect(msg).toContain('Bookkeeping automation for trades')
     expect(msg).toContain('Example Source')
     expect(msg).toContain('https://example.com/a')
@@ -51,7 +66,6 @@ describe('formatResearchMessages', () => {
           targetCustomer: 'Solo electricians',
           setupPriceRangeGbp: '£500–£1,500',
           monthlyRetainerRangeGbp: '£100–£300',
-          expectedValueOrRoi: 'Saves ~5h/week',
           pricingBasis: 'observed_market_range',
           easeToSellScore: 7,
           profitPotentialScore: 8,
@@ -64,7 +78,6 @@ describe('formatResearchMessages', () => {
     expect(msg).toContain('Solo electricians')
     expect(msg).toContain('£500–£1,500')
     expect(msg).toContain('£100–£300')
-    expect(msg).toContain('Saves ~5h/week')
     expect(msg).toContain('7/10')
     expect(msg).toContain('8/10')
     expect(msg).toContain('9/10')
@@ -88,6 +101,85 @@ describe('formatResearchMessages', () => {
     expect(msg).toContain(expectedLabel)
   })
 
+  it.each([
+    ['high', 'Evidence: 🟢 High'],
+    ['medium', 'Evidence: 🟡 Medium'],
+    ['low', 'Evidence: 🟠 Low'],
+    ['estimate_only', 'Evidence: ⚪ Estimate only'],
+  ] as const)('renders distinct label for evidenceStrength=%s', (strength, expectedLabel) => {
+    const msg = formatResearchMessages('T', researchOutput({ recommendations: [recommendation({ evidenceStrength: strength })] }))[0]!
+    expect(msg).toContain(expectedLabel)
+  })
+
+  it.each([
+    ['official_vendor', '🏢 Official vendor'],
+    ['independent_research', '🔬 Independent research'],
+    ['government_or_trade_body', '🏛️ Government/trade body'],
+    ['marketplace_or_review', '🛒 Marketplace/review'],
+    ['consultancy_or_agency', '🤝 Consultancy/agency'],
+    ['video_or_social', '📹 Video/social'],
+  ] as const)('renders distinct label for sourceType=%s', (sourceType, expectedLabel) => {
+    const result = researchOutput({ sources: [{ url: 'https://example.com/a', title: 'A', relevantExcerpt: 'a', sourceType }] })
+    const msg = formatResearchMessages('T', result)[0]!
+    expect(msg).toContain(expectedLabel)
+  })
+
+  it('computes and displays profit ROI% from the four roiModel numbers rather than trusting model arithmetic', () => {
+    const result = researchOutput({
+      recommendations: [recommendation({
+        pricingBasis: 'estimated_recommendation',
+        roiModel: roiModel({
+          roiType: 'profit_roi',
+          extraLeadsOrBookingsPerMonth: 10,
+          conversionRatePercent: 50,
+          avgValuePerConvertedJobGbp: 100,
+          monthlyCostGbp: 200,
+          calculationNote: 'Estimated from typical trade job margins.',
+        }),
+      })],
+    })
+    // net = 10 * 0.5 * 100 - 200 = 300; roi% = 300/200*100 = 150%
+    const msg = formatResearchMessages('T', result)[0]!
+    expect(msg).toContain('📈 Profit ROI: ~150%')
+    expect(msg).toContain('Estimated from typical trade job margins.')
+  })
+
+  it('labels revenue_uplift distinctly from profit_roi', () => {
+    const result = researchOutput({
+      recommendations: [recommendation({
+        roiModel: roiModel({ roiType: 'revenue_uplift', extraLeadsOrBookingsPerMonth: 4, conversionRatePercent: 100, avgValuePerConvertedJobGbp: 50, monthlyCostGbp: 100 }),
+      })],
+    })
+    const msg = formatResearchMessages('T', result)[0]!
+    expect(msg).toContain('📈 Revenue uplift: ~')
+    expect(msg).not.toContain('📈 Profit ROI')
+  })
+
+  it('falls back to calculationNote only when any roiModel number is null', () => {
+    const result = researchOutput({
+      recommendations: [recommendation({ roiModel: roiModel({ calculationNote: 'Not enough data to model a numeric ROI.' }) })],
+    })
+    const msg = formatResearchMessages('T', result)[0]!
+    expect(msg).toContain('📈 Profit ROI: Not enough data to model a numeric ROI.')
+    expect(msg).not.toMatch(/~-?\d+%/)
+  })
+
+  it('falls back to calculationNote when monthlyCostGbp is zero (avoids divide-by-zero)', () => {
+    const result = researchOutput({
+      recommendations: [recommendation({
+        roiModel: roiModel({ extraLeadsOrBookingsPerMonth: 5, conversionRatePercent: 50, avgValuePerConvertedJobGbp: 100, monthlyCostGbp: 0, calculationNote: 'Free tool, no monthly cost.' }),
+      })],
+    })
+    const msg = formatResearchMessages('T', result)[0]!
+    expect(msg).toContain('📈 Profit ROI: Free tool, no monthly cost.')
+    expect(msg).not.toMatch(/Infinity|NaN/)
+  })
+
+  it('omits ROI line entirely when roiModel is null', () => {
+    const msg = formatResearchMessages('T', researchOutput({ recommendations: [recommendation({ roiModel: null })] }))[0]!
+    expect(msg).not.toContain('📈')
+  })
+
   it('shows "no supporting sources" wording when estimated with empty supportingSourceIndexes', () => {
     const result = researchOutput({
       recommendations: [recommendation({ pricingBasis: 'estimated_recommendation', supportingSourceIndexes: [] })],
@@ -105,8 +197,8 @@ describe('formatResearchMessages', () => {
   it('resolves supportingSourceIndexes to their actual source URLs', () => {
     const result = researchOutput({
       sources: [
-        { url: 'https://example.com/a', title: 'A', relevantExcerpt: 'a' },
-        { url: 'https://example.com/b', title: 'B', relevantExcerpt: 'b' },
+        { url: 'https://example.com/a', title: 'A', relevantExcerpt: 'a', sourceType: 'independent_research' },
+        { url: 'https://example.com/b', title: 'B', relevantExcerpt: 'b', sourceType: 'official_vendor' },
       ],
       recommendations: [recommendation({ pricingBasis: 'observed_market_range', supportingSourceIndexes: [1] })],
     })
@@ -156,7 +248,7 @@ describe('formatResearchMessages', () => {
 
   it('hard-splits a single pathologically long excerpt without producing an oversized message', () => {
     const result = researchOutput({
-      sources: [{ url: 'https://example.com/a', title: 'Long', relevantExcerpt: 'Y'.repeat(10_000) }],
+      sources: [{ url: 'https://example.com/a', title: 'Long', relevantExcerpt: 'Y'.repeat(10_000), sourceType: 'video_or_social' }],
     })
     const messages = formatResearchMessages('T', result)
     expect(messages.length).toBeGreaterThan(1)

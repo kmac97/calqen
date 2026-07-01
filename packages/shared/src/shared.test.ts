@@ -230,10 +230,11 @@ describe('researchOutputSchema', () => {
     problemSolved: 'Manual reconciliation',
     workflow: 'Connect Xero, auto-categorise',
     requiredTools: ['Xero'],
+    evidenceStrength: 'medium' as const,
     targetCustomer: null,
     setupPriceRangeGbp: null,
     monthlyRetainerRangeGbp: null,
-    expectedValueOrRoi: null,
+    roiModel: null,
     pricingBasis: 'not_applicable' as const,
     easeToSellScore: null,
     profitPotentialScore: null,
@@ -243,10 +244,11 @@ describe('researchOutputSchema', () => {
 
   const baseOutput = {
     executiveSummary: 'Summary',
+    sourceGeographyNote: 'All sources are UK trade/industry sites.',
     recommendations: [baseRecommendation],
     fastestOfferToLaunch: 'Bookkeeping automation',
     assumptionsAndCaveats: [],
-    sources: [{ url: 'https://example.com/a', title: 'A', relevantExcerpt: 'excerpt' }],
+    sources: [{ url: 'https://example.com/a', title: 'A', relevantExcerpt: 'excerpt', sourceType: 'independent_research' as const }],
   }
 
   it('accepts a valid payload with offer fields populated and a sourced pricing basis', () => {
@@ -254,10 +256,18 @@ describe('researchOutputSchema', () => {
       ...baseOutput,
       recommendations: [{
         ...baseRecommendation,
+        evidenceStrength: 'high' as const,
         targetCustomer: 'Solo electricians',
         setupPriceRangeGbp: '£500–£1,500',
         monthlyRetainerRangeGbp: '£100–£300',
-        expectedValueOrRoi: 'Saves ~5h/week',
+        roiModel: {
+          roiType: 'profit_roi' as const,
+          extraLeadsOrBookingsPerMonth: 10,
+          conversionRatePercent: 50,
+          avgValuePerConvertedJobGbp: 100,
+          monthlyCostGbp: 200,
+          calculationNote: 'Based on sourced conversion data.',
+        },
         pricingBasis: 'observed_market_range' as const,
         easeToSellScore: 7,
         profitPotentialScore: 8,
@@ -268,8 +278,56 @@ describe('researchOutputSchema', () => {
     expect(researchOutputSchema.safeParse(valid).success).toBe(true)
   })
 
-  it('accepts a valid payload with all seven offer fields null and pricingBasis not_applicable', () => {
+  it('accepts a valid payload with all offer fields null and pricingBasis not_applicable', () => {
     expect(researchOutputSchema.safeParse(baseOutput).success).toBe(true)
+  })
+
+  it('accepts a roiModel with partial-null numeric fields (estimate with incomplete data)', () => {
+    const valid = {
+      ...baseOutput,
+      recommendations: [{
+        ...baseRecommendation,
+        roiModel: {
+          roiType: 'revenue_uplift' as const,
+          extraLeadsOrBookingsPerMonth: 5,
+          conversionRatePercent: null,
+          avgValuePerConvertedJobGbp: null,
+          monthlyCostGbp: 100,
+          calculationNote: 'Conversion rate and job value not available in source material.',
+        },
+      }],
+    }
+    expect(researchOutputSchema.safeParse(valid).success).toBe(true)
+  })
+
+  it.each(['high', 'medium', 'low', 'estimate_only'] as const)('accepts evidenceStrength=%s', (evidenceStrength) => {
+    expect(researchOutputSchema.safeParse({ ...baseOutput, recommendations: [{ ...baseRecommendation, evidenceStrength }] }).success).toBe(true)
+  })
+
+  it.each([
+    'official_vendor', 'independent_research', 'government_or_trade_body',
+    'marketplace_or_review', 'consultancy_or_agency', 'video_or_social',
+  ] as const)('accepts sourceType=%s', (sourceType) => {
+    expect(researchOutputSchema.safeParse({ ...baseOutput, sources: [{ ...baseOutput.sources[0]!, sourceType }] }).success).toBe(true)
+  })
+
+  it('rejects estimate_only evidenceStrength paired with observed_market_range pricing', () => {
+    const invalid = {
+      ...baseOutput,
+      recommendations: [{
+        ...baseRecommendation,
+        evidenceStrength: 'estimate_only' as const,
+        pricingBasis: 'observed_market_range' as const,
+        supportingSourceIndexes: [0],
+      }],
+    }
+    expect(researchOutputSchema.safeParse(invalid).success).toBe(false)
+  })
+
+  it('rejects a payload missing sourceGeographyNote', () => {
+    const { sourceGeographyNote: _omit, ...invalid } = baseOutput
+    void _omit
+    expect(researchOutputSchema.safeParse(invalid).success).toBe(false)
   })
 
   it('accepts empty recommendations and sources arrays', () => {
