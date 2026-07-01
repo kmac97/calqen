@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    name: typecheck, lint, test
+    name: typecheck, lint, test, docker build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -15,11 +15,13 @@ jobs:
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: pnpm
 
       - name: Install dependencies
@@ -33,3 +35,12 @@ jobs:
 
       - name: Test
         run: pnpm test
+
+      - name: Docker build — api
+        run: docker build -f Dockerfile.api -t calqen-api:ci .
+
+      - name: Docker build — bot
+        run: docker build -f Dockerfile.bot -t calqen-bot:ci .
+
+      - name: Docker build — orchestrator
+        run: docker build -f Dockerfile.orchestrator -t calqen-orchestrator:ci .

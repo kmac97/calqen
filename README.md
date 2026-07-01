@@ -15,6 +15,8 @@ Send a Telegram message. Calqen classifies, plans, gets approval, and delegates 
 
 ## Setup
 
+Requires Node 24 (`.nvmrc`) for local development and VPS Docker builds.
+
 ```bash
 cp .env.example .env
 # Fill in secrets via Doppler or manually

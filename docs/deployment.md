@@ -1,5 +1,9 @@
 # Calqen Deployment
 
+## Runtime Requirement
+
+Node 24 (`.nvmrc`) is required for local development and VPS Docker builds — pinned `pnpm@11.9.0` (see root `package.json`) requires Node >=22.13, and Node 20 reached end-of-life.
+
 ## Local Development
 
 Unchanged by this document. Local dev still runs each service directly via Doppler, never Docker:
