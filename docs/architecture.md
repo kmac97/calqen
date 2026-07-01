@@ -15,7 +15,7 @@ packages/bot
     │  command  → POST /api/tasks/:id/approve, etc.
     │
     ▼
-packages/api (Hono, Railway)
+packages/api (Hono, VPS via Docker)
     │  creates task row, inserts outbox row
     │  exposes all runner + bot routes
     │

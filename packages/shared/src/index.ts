@@ -2,8 +2,11 @@
 export * from './schema.js'
 
 // DB client
-export { db } from './db.js'
+export { db, closeDb } from './db.js'
 export type { DB, DBTransaction } from './db.js'
+
+// Startup environment validation
+export { validateEnv, apiEnvSchema, botEnvSchema, orchestratorEnvSchema, runnerEnvSchema } from './env.js'
 
 // Types
 export * from './types.js'

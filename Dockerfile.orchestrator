@@ -1,0 +1,25 @@
+FROM node:20-alpine
+WORKDIR /app
+
+ARG GIT_SHA
+ENV GIT_SHA=$GIT_SHA
+ENV NODE_ENV=production
+
+RUN corepack enable
+
+# pnpm's frozen-lockfile install needs every workspace package.json the lockfile
+# references, even ones this image never runs, or it can't verify the lockfile
+# still matches the workspace.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY packages/shared/package.json packages/shared/package.json
+COPY packages/api/package.json packages/api/package.json
+COPY packages/bot/package.json packages/bot/package.json
+COPY packages/orchestrator/package.json packages/orchestrator/package.json
+COPY packages/runner/package.json packages/runner/package.json
+
+RUN pnpm install --frozen-lockfile
+
+COPY packages/shared packages/shared
+COPY packages/orchestrator packages/orchestrator
+
+CMD ["pnpm", "dev:orchestrator"]

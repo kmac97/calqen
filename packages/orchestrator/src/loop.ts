@@ -420,10 +420,16 @@ export async function researchLoop() {
   }
 }
 
+// Set by stopAllLoops() on shutdown — checked before each loop schedules its next tick. Not
+// waited on: every claim is an atomic, lease-fenced transaction, so interrupting mid-tick just
+// leaves a task claimed-with-a-lease that the existing lease-expiry job already recovers, the
+// same recovery path that already handles a hard process kill today.
+let shuttingDown = false
+
 function startLoop(name: string, fn: () => Promise<void>) {
   const tick = async () => {
     try { await fn() } catch (err) { console.error(`[${name}] unhandled:`, err) }
-    setTimeout(() => { void tick() }, POLL_MS)
+    if (!shuttingDown) setTimeout(() => { void tick() }, POLL_MS)
   }
   void tick()
 }
@@ -433,4 +439,8 @@ export function startAllLoops() {
   startLoop('plan', planLoop)
   startLoop('research', researchLoop)
   console.log('Orchestrator loops started')
+}
+
+export function stopAllLoops() {
+  shuttingDown = true
 }

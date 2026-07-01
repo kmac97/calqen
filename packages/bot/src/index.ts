@@ -1,4 +1,7 @@
 import { Bot } from 'grammy'
+import { botEnvSchema, validateEnv } from '@calqen/shared'
+
+validateEnv(botEnvSchema, 'bot')
 
 const bot = new Bot(process.env['TELEGRAM_BOT_TOKEN']!)
 
@@ -104,6 +107,15 @@ async function pollOutbox() {
   }
 }
 
-setInterval(() => { void pollOutbox() }, 3000)
+const outboxInterval = setInterval(() => { void pollOutbox() }, 3000)
+
+async function shutdown() {
+  clearInterval(outboxInterval)
+  await bot.stop()
+  console.log('[bot] shutting down')
+}
+
+process.on('SIGINT', () => { void shutdown() })
+process.on('SIGTERM', () => { void shutdown() })
 
 await bot.start()

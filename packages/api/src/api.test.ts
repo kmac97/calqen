@@ -10,11 +10,14 @@ const HAS_REAL_DB = !!process.env['DATABASE_URL'] && process.env['DATABASE_URL']
 // ── Auth: no DB required ───────────────────────────────────────────────────
 
 describe('GET /api/health', () => {
-  it('returns 200', async () => {
+  it('returns 200 with service/status/version/timestamp', async () => {
     const res = await app.request('/api/health')
     expect(res.status).toBe(200)
-    const body = await res.json() as { ok: boolean }
-    expect(body.ok).toBe(true)
+    const body = await res.json() as { service: string; status: string; version: string; timestamp: string }
+    expect(body.service).toBe('api')
+    expect(body.status).toBe('ok')
+    expect(typeof body.version).toBe('string')
+    expect(typeof body.timestamp).toBe('string')
   })
 })
 

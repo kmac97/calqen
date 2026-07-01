@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@11.9.0",
   "scripts": {
     "typecheck": "pnpm -r typecheck",
     "lint": "eslint . --ext .ts --max-warnings 0",

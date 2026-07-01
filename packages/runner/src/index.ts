@@ -1,10 +1,12 @@
 import { readFileSync, writeFileSync, existsSync } from 'fs'
 import type { BuilderOutput, Task, TaskPlanRow, Artifact, Project } from '@calqen/shared'
-import { projectSettingsSchema } from '@calqen/shared'
+import { projectSettingsSchema, runnerEnvSchema, validateEnv } from '@calqen/shared'
 import { createApi, type RunnerToken } from './api.js'
 import { runBuilder } from './agents/builder.js'
 import { runVerifier } from './agents/verifier.js'
 import { checkDiffPolicy, isProtectedBranch } from './policy.js'
+
+validateEnv(runnerEnvSchema, 'runner')
 
 const API_BASE = process.env['CALQEN_API_URL'] ?? 'http://localhost:3001'
 const TOKEN_PATH = process.env['RUNNER_TOKEN_PATH'] ?? '.runner-token'

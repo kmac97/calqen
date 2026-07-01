@@ -1,0 +1,49 @@
+# Production-oriented example for the future VPS. Not used in local dev — local dev keeps
+# running each service directly via `doppler run -- pnpm dev:<service>` (see docs/deployment.md).
+#
+# Deliberately absent from this file:
+#   - A `db` service — PostgreSQL is Supabase, external to this compose stack.
+#   - A `runner` service — the Runner stays on the Windows PC per the Phase 1 dry-run boundary,
+#     never in Docker.
+#   - Any secret values — `env_file: .env` points at a server-side .env populated from Doppler at
+#     deploy time; this file itself contains no secrets and is safe to commit.
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+      args:
+        GIT_SHA: ${GIT_SHA:-}
+    env_file: .env
+    ports:
+      - '3001:3001'
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:3001/api/health']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.bot
+      args:
+        GIT_SHA: ${GIT_SHA:-}
+    env_file: .env
+    restart: unless-stopped
+    depends_on:
+      - api
+
+  orchestrator:
+    build:
+      context: .
+      dockerfile: Dockerfile.orchestrator
+      args:
+        GIT_SHA: ${GIT_SHA:-}
+    env_file: .env
+    restart: unless-stopped
+    depends_on:
+      - api
