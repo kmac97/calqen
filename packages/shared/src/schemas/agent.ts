@@ -25,6 +25,9 @@ export const sourceTypeSchema = z.enum([
   'marketplace_or_review',
   'consultancy_or_agency',
   'video_or_social',
+  // Server-attached fallback when the model's annotations don't cover a given raw source
+  // (fewer annotations than sources, or an out-of-range index) — never fabricate a real category.
+  'unclassified',
 ])
 
 export const researchSourceSchema = z.object({
@@ -86,26 +89,48 @@ export const researchRecommendationSchema = z
     path: ['evidenceStrength'],
   })
 
-export const researchOutputSchema = z
-  .object({
-    executiveSummary: z.string(),
-    // Explicit statement of what the source set actually covers geographically, so UK/regional
-    // relevance is never silently implied when the evidence is really US/global.
-    sourceGeographyNote: z.string(),
-    recommendations: z.array(researchRecommendationSchema),
-    fastestOfferToLaunch: z.string(),
-    assumptionsAndCaveats: z.array(z.string()),
-    sources: z.array(researchSourceSchema),
-  })
-  .refine(
-    (out) => out.recommendations.every((r) => r.supportingSourceIndexes.every((i) => i < out.sources.length)),
-    {
-      message: 'every supportingSourceIndexes entry must be a valid index into sources[]',
-      path: ['recommendations'],
-    },
-  )
+// Unrefined base shape, kept separate so researchModelOutputSchema below can .omit() sources —
+// z.object().refine() returns a ZodEffects wrapper that .omit() isn't available on.
+const researchOutputObjectSchema = z.object({
+  executiveSummary: z.string(),
+  // Explicit statement of what the source set actually covers geographically, so UK/regional
+  // relevance is never silently implied when the evidence is really US/global.
+  sourceGeographyNote: z.string(),
+  recommendations: z.array(researchRecommendationSchema),
+  fastestOfferToLaunch: z.string(),
+  assumptionsAndCaveats: z.array(z.string()),
+  sources: z.array(researchSourceSchema),
+})
+
+export const researchOutputSchema = researchOutputObjectSchema.refine(
+  (out) => out.recommendations.every((r) => r.supportingSourceIndexes.every((i) => i < out.sources.length)),
+  {
+    message: 'every supportingSourceIndexes entry must be a valid index into sources[]',
+    path: ['recommendations'],
+  },
+)
+
+// Per-source annotation the model returns, keyed by index into the real Firecrawl results —
+// never url/title, since the model isn't trusted to preserve source count or order. The server
+// builds the final canonical sources[] directly from Firecrawl and attaches these by matching
+// sourceIndex (packages/orchestrator/src/agents/researchSources.ts).
+export const sourceAnnotationSchema = z.object({
+  sourceIndex: z.number().int().min(0),
+  sourceType: sourceTypeSchema,
+  relevantExcerpt: z.string(),
+})
+
+// What the model actually generates via structured outputs — sources[] replaced with
+// sourceAnnotations[]. Deliberately has no cross-refine against source count, since the model's
+// own claimed source count isn't ground truth; that validation happens server-side against the
+// real rawSources.length instead.
+export const researchModelOutputSchema = researchOutputObjectSchema.omit({ sources: true }).extend({
+  sourceAnnotations: z.array(sourceAnnotationSchema),
+})
 
 export type ResearchSource = z.infer<typeof researchSourceSchema>
 export type ResearchRecommendation = z.infer<typeof researchRecommendationSchema>
 export type ResearchOutput = z.infer<typeof researchOutputSchema>
 export type RoiModel = NonNullable<ResearchRecommendation['roiModel']>
+export type SourceAnnotation = z.infer<typeof sourceAnnotationSchema>
+export type ResearchModelOutput = z.infer<typeof researchModelOutputSchema>

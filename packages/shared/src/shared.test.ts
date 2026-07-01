@@ -4,7 +4,7 @@ import { calculateCost } from './costs.js'
 import { redactSecrets, redactSecretsDeep } from './redact.js'
 import { computeScopeHash, deletionHashPayload } from './hash.js'
 import { runnerDeletionDetectedSchema, runnerCompleteSchema } from './schemas/runner.js'
-import { researchOutputSchema } from './schemas/agent.js'
+import { researchOutputSchema, researchModelOutputSchema, sourceAnnotationSchema } from './schemas/agent.js'
 
 describe('generateShortId', () => {
   it('returns an 8-char hex string', () => {
@@ -372,5 +372,59 @@ describe('researchOutputSchema', () => {
       recommendations: [{ ...baseRecommendation, pricingBasis: 'observed_market_range' as const, supportingSourceIndexes: [] }],
     }
     expect(researchOutputSchema.safeParse(invalid).success).toBe(false)
+  })
+
+  it('accepts sourceType "unclassified" on a final source (server-attached fallback value)', () => {
+    const valid = { ...baseOutput, sources: [{ ...baseOutput.sources[0]!, sourceType: 'unclassified' as const }] }
+    expect(researchOutputSchema.safeParse(valid).success).toBe(true)
+  })
+})
+
+describe('sourceAnnotationSchema', () => {
+  it('accepts a valid annotation', () => {
+    const valid = { sourceIndex: 0, sourceType: 'official_vendor', relevantExcerpt: 'excerpt' }
+    expect(sourceAnnotationSchema.safeParse(valid).success).toBe(true)
+  })
+
+  it('rejects a negative sourceIndex', () => {
+    expect(sourceAnnotationSchema.safeParse({ sourceIndex: -1, sourceType: 'official_vendor', relevantExcerpt: 'x' }).success).toBe(false)
+  })
+
+  it('rejects an unknown sourceType value', () => {
+    expect(sourceAnnotationSchema.safeParse({ sourceIndex: 0, sourceType: 'not_a_real_type', relevantExcerpt: 'x' }).success).toBe(false)
+  })
+})
+
+describe('researchModelOutputSchema', () => {
+  const baseModelOutput = {
+    executiveSummary: 'Summary',
+    sourceGeographyNote: 'All sources are UK trade/industry sites.',
+    recommendations: [] as unknown[],
+    fastestOfferToLaunch: 'N/A',
+    assumptionsAndCaveats: [] as string[],
+    sourceAnnotations: [{ sourceIndex: 0, sourceType: 'official_vendor' as const, relevantExcerpt: 'excerpt' }],
+  }
+
+  it('accepts sourceAnnotations in place of a full sources[] array', () => {
+    expect(researchModelOutputSchema.safeParse(baseModelOutput).success).toBe(true)
+  })
+
+  it('accepts sourceAnnotations out of order and with gaps (no count/order constraint at this layer)', () => {
+    const valid = { ...baseModelOutput, sourceAnnotations: [
+      { sourceIndex: 4, sourceType: 'official_vendor' as const, relevantExcerpt: 'x' },
+      { sourceIndex: 0, sourceType: 'video_or_social' as const, relevantExcerpt: 'y' },
+    ] }
+    expect(researchModelOutputSchema.safeParse(valid).success).toBe(true)
+  })
+
+  it('rejects a payload missing sourceAnnotations entirely (the model no longer gets to skip source classification)', () => {
+    const invalid = {
+      executiveSummary: 'Summary',
+      sourceGeographyNote: 'note',
+      recommendations: [],
+      fastestOfferToLaunch: 'N/A',
+      assumptionsAndCaveats: [],
+    }
+    expect(researchModelOutputSchema.safeParse(invalid).success).toBe(false)
   })
 })

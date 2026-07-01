@@ -2,9 +2,10 @@ import { eq } from 'drizzle-orm'
 import Anthropic from '@anthropic-ai/sdk'
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod'
 import FirecrawlApp from '@mendable/firecrawl-js'
-import { db, tasks, researchOutputSchema, type ResearchOutput } from '@calqen/shared'
+import { db, tasks, researchOutputSchema, researchModelOutputSchema, type ResearchOutput } from '@calqen/shared'
 import { runAgent, CancelledError, PartialUsageError, type AgentResult } from './runAgent.js'
 import { buildResearchPrompt } from './researchPrompt.js'
+import { reconcileSources, allIndexesValid, type RawSource } from './researchSources.js'
 import { envInt } from '../env.js'
 
 const client = new Anthropic()
@@ -30,9 +31,7 @@ export async function researchTask(taskId: string, context: ResearchContext): Pr
     fn: async (): Promise<AgentResult<ResearchOutput>> => {
       const firecrawl = new FirecrawlApp({ apiKey: process.env['FIRECRAWL_API_KEY']! })
       const searchResult = await firecrawl.search(context.goal, { limit: MAX_SOURCES })
-      const rawSources = (searchResult.web ?? []).slice(0, MAX_SOURCES) as Array<{
-        url?: string; title?: string; description?: string
-      }>
+      const rawSources: RawSource[] = (searchResult.web ?? []).slice(0, MAX_SOURCES) as RawSource[]
 
       const sourcesText = rawSources
         .map((s, i) => `[${i}] URL: ${s.url ?? ''}\nTitle: ${s.title ?? ''}\nExcerpt: ${s.description ?? ''}`.trim())
@@ -63,7 +62,7 @@ export async function researchTask(taskId: string, context: ResearchContext): Pr
             model: FAST_MODEL,
             max_tokens: 8192,
             messages: [{ role: 'user', content: prompt }],
-            output_config: { format: zodOutputFormat(researchOutputSchema) },
+            output_config: { format: zodOutputFormat(researchModelOutputSchema) },
           })
 
           totalInputTokens += message.usage.input_tokens
@@ -72,14 +71,22 @@ export async function researchTask(taskId: string, context: ResearchContext): Pr
           const block = message.content.find((b) => b.type === 'text')
           if (!block || block.type !== 'text') throw new Error('No text block in research response')
 
-          const parsed = researchOutputSchema.parse(JSON.parse(block.text))
+          const modelOutput = researchModelOutputSchema.parse(JSON.parse(block.text))
 
-          // Trust our own scraped data over the model's transcription for url/title — the one
-          // thing that broke this earlier was relying on the model to copy long strings correctly.
-          parsed.sources.forEach((source, i) => {
-            const original = rawSources[i]
-            if (original?.url) source.url = original.url
-            if (original?.title) source.title = original.title
+          const indexesValid = modelOutput.recommendations.every((r) => allIndexesValid(r.supportingSourceIndexes, rawSources.length))
+          if (!indexesValid) throw new Error('supportingSourceIndexes references an index outside the real source list')
+
+          // The model never returns url/title at all — sources[] is built entirely from the real
+          // Firecrawl results, with the model's per-index annotations (sourceType/relevantExcerpt)
+          // attached by matching sourceIndex. This is what makes source count/order/identity
+          // immune to model mistakes, rather than just overwriting fields after the fact.
+          const parsed = researchOutputSchema.parse({
+            executiveSummary: modelOutput.executiveSummary,
+            sourceGeographyNote: modelOutput.sourceGeographyNote,
+            recommendations: modelOutput.recommendations,
+            fastestOfferToLaunch: modelOutput.fastestOfferToLaunch,
+            assumptionsAndCaveats: modelOutput.assumptionsAndCaveats,
+            sources: reconcileSources(rawSources, modelOutput.sourceAnnotations),
           })
 
           return {

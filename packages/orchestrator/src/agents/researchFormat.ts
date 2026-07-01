@@ -44,6 +44,8 @@ function sourceTypeLabel(type: ResearchOutput['sources'][number]['sourceType']):
       return '🤝 Consultancy/agency'
     case 'video_or_social':
       return '📹 Video/social'
+    case 'unclassified':
+      return '❓ Unclassified'
   }
 }
 
