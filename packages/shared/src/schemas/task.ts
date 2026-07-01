@@ -12,6 +12,10 @@ export const classificationOutputSchema = z.object({
   acceptanceCriteria: z.array(z.string()),
   riskLevel: z.enum(['low', 'medium', 'high']),
   requiresApproval: z.boolean(),
+  // True when this is fundamentally a technical comparison (libraries, frameworks, APIs, tools
+  // for a stack decision) rather than a commercial offer/business-idea evaluation or general
+  // knowledge research — selects research mode without needing a tasks.taskType migration.
+  isTechnicalComparison: z.boolean(),
 })
 
 export type ClassificationOutput = z.infer<typeof classificationOutputSchema>

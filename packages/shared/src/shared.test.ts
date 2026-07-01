@@ -4,7 +4,8 @@ import { calculateCost } from './costs.js'
 import { redactSecrets, redactSecretsDeep } from './redact.js'
 import { computeScopeHash, deletionHashPayload } from './hash.js'
 import { runnerDeletionDetectedSchema, runnerCompleteSchema } from './schemas/runner.js'
-import { researchOutputSchema, researchModelOutputSchema, sourceAnnotationSchema } from './schemas/agent.js'
+import { researchOutputSchema, researchModelOutputSchema, sourceAnnotationSchema, technicalResearchOutputSchema, technicalResearchModelOutputSchema } from './schemas/agent.js'
+import { classificationOutputSchema } from './schemas/task.js'
 
 describe('generateShortId', () => {
   it('returns an 8-char hex string', () => {
@@ -243,6 +244,7 @@ describe('researchOutputSchema', () => {
   }
 
   const baseOutput = {
+    mode: 'commercial' as const,
     executiveSummary: 'Summary',
     sourceGeographyNote: 'All sources are UK trade/industry sites.',
     recommendations: [baseRecommendation],
@@ -397,6 +399,7 @@ describe('sourceAnnotationSchema', () => {
 
 describe('researchModelOutputSchema', () => {
   const baseModelOutput = {
+    mode: 'commercial' as const,
     executiveSummary: 'Summary',
     sourceGeographyNote: 'All sources are UK trade/industry sites.',
     recommendations: [] as unknown[],
@@ -426,5 +429,130 @@ describe('researchModelOutputSchema', () => {
       assumptionsAndCaveats: [],
     }
     expect(researchModelOutputSchema.safeParse(invalid).success).toBe(false)
+  })
+})
+
+describe('classificationOutputSchema', () => {
+  const baseClassification = {
+    title: 'Compare charting libraries',
+    goal: 'Pick a charting library',
+    taskType: 'research' as const,
+    executionTarget: 'orchestrator' as const,
+    projectName: null,
+    projectRequired: false,
+    clarificationQuestion: null,
+    constraints: [] as string[],
+    acceptanceCriteria: [] as string[],
+    riskLevel: 'low' as const,
+    requiresApproval: false,
+  }
+
+  it('accepts isTechnicalComparison: true', () => {
+    expect(classificationOutputSchema.safeParse({ ...baseClassification, isTechnicalComparison: true }).success).toBe(true)
+  })
+
+  it('accepts isTechnicalComparison: false', () => {
+    expect(classificationOutputSchema.safeParse({ ...baseClassification, isTechnicalComparison: false }).success).toBe(true)
+  })
+
+  it('rejects a payload missing isTechnicalComparison', () => {
+    expect(classificationOutputSchema.safeParse(baseClassification).success).toBe(false)
+  })
+})
+
+describe('technicalResearchOutputSchema / technicalResearchModelOutputSchema', () => {
+  const baseOption = {
+    name: 'Lightweight Charts',
+    whyThisFits: 'Purpose-built for financial time-series, canvas-based rendering.',
+    keyCapabilities: ['candlestick series', 'time-scale scrolling'],
+    licensingNote: 'Apache-2.0',
+    evidenceStrength: 'high' as const,
+    supportingSourceIndexes: [0],
+  }
+
+  const baseTechnicalOutput = {
+    mode: 'technical' as const,
+    executiveSummary: 'Summary',
+    primaryRecommendation: baseOption,
+    alternative: { ...baseOption, name: 'amCharts 5', supportingSourceIndexes: [1] },
+    keyTradeoffs: ['Lightweight Charts is smaller; amCharts 5 has richer theming.'],
+    implementationNote: 'Drop into the existing React chart panel with minimal wiring.',
+    notRecommended: [] as Array<{ name: string; reason: string; supportingSourceIndexes: number[] }>,
+    assumptionsAndCaveats: [] as string[],
+    sources: [
+      { url: 'https://tradingview.github.io/lightweight-charts/', title: 'Lightweight Charts docs', relevantExcerpt: 'excerpt', sourceType: 'official_vendor' as const },
+      { url: 'https://www.amcharts.com/docs/v5/', title: 'amCharts 5 docs', relevantExcerpt: 'excerpt', sourceType: 'official_vendor' as const },
+    ],
+  }
+
+  it('accepts a valid payload with primaryRecommendation, alternative, and empty notRecommended', () => {
+    expect(technicalResearchOutputSchema.safeParse(baseTechnicalOutput).success).toBe(true)
+  })
+
+  it('accepts a null licensingNote when genuinely not applicable', () => {
+    const valid = { ...baseTechnicalOutput, primaryRecommendation: { ...baseOption, licensingNote: null } }
+    expect(technicalResearchOutputSchema.safeParse(valid).success).toBe(true)
+  })
+
+  it('accepts a populated notRecommended list', () => {
+    const valid = { ...baseTechnicalOutput, notRecommended: [{ name: 'D3.js', reason: 'Too low-level for the required timeline.', supportingSourceIndexes: [0] }] }
+    expect(technicalResearchOutputSchema.safeParse(valid).success).toBe(true)
+  })
+
+  it('rejects a payload missing primaryRecommendation', () => {
+    const { primaryRecommendation: _omit, ...invalid } = baseTechnicalOutput
+    void _omit
+    expect(technicalResearchOutputSchema.safeParse(invalid).success).toBe(false)
+  })
+
+  it('rejects a payload missing alternative', () => {
+    const { alternative: _omit, ...invalid } = baseTechnicalOutput
+    void _omit
+    expect(technicalResearchOutputSchema.safeParse(invalid).success).toBe(false)
+  })
+
+  it('rejects an out-of-range supportingSourceIndexes entry in primaryRecommendation', () => {
+    const invalid = { ...baseTechnicalOutput, primaryRecommendation: { ...baseOption, supportingSourceIndexes: [99] } }
+    expect(technicalResearchOutputSchema.safeParse(invalid).success).toBe(false)
+  })
+
+  it('rejects an out-of-range supportingSourceIndexes entry in alternative', () => {
+    const invalid = { ...baseTechnicalOutput, alternative: { ...baseOption, name: 'amCharts 5', supportingSourceIndexes: [99] } }
+    expect(technicalResearchOutputSchema.safeParse(invalid).success).toBe(false)
+  })
+
+  it('rejects an out-of-range supportingSourceIndexes entry in notRecommended', () => {
+    const invalid = { ...baseTechnicalOutput, notRecommended: [{ name: 'D3.js', reason: 'x', supportingSourceIndexes: [99] }] }
+    expect(technicalResearchOutputSchema.safeParse(invalid).success).toBe(false)
+  })
+
+  it('has no pricing/ROI/geography fields structurally present (commercial framing cannot be injected)', () => {
+    const withCommercialFields = { ...baseTechnicalOutput, pricingBasis: 'observed_market_range', roiModel: null, sourceGeographyNote: 'irrelevant' }
+    // Zod strips unknown keys by default rather than rejecting — assert the parsed *output* doesn't carry them.
+    const result = technicalResearchOutputSchema.safeParse(withCommercialFields)
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data).not.toHaveProperty('pricingBasis')
+      expect(result.data).not.toHaveProperty('roiModel')
+      expect(result.data).not.toHaveProperty('sourceGeographyNote')
+    }
+  })
+
+  it('technicalResearchModelOutputSchema accepts sourceAnnotations in place of sources[]', () => {
+    const modelOutput = {
+      mode: 'technical' as const,
+      executiveSummary: baseTechnicalOutput.executiveSummary,
+      primaryRecommendation: baseOption,
+      alternative: baseTechnicalOutput.alternative,
+      keyTradeoffs: baseTechnicalOutput.keyTradeoffs,
+      implementationNote: baseTechnicalOutput.implementationNote,
+      notRecommended: baseTechnicalOutput.notRecommended,
+      assumptionsAndCaveats: baseTechnicalOutput.assumptionsAndCaveats,
+      sourceAnnotations: [
+        { sourceIndex: 0, sourceType: 'official_vendor' as const, relevantExcerpt: 'excerpt' },
+        { sourceIndex: 1, sourceType: 'official_vendor' as const, relevantExcerpt: 'excerpt' },
+      ],
+    }
+    expect(technicalResearchModelOutputSchema.safeParse(modelOutput).success).toBe(true)
   })
 })

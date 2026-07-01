@@ -148,6 +148,41 @@ All agents are invoked through the `runAgent` wrapper which handles logging, spe
 - The prompt (extracted to a pure, testable `buildResearchPrompt()` in `packages/orchestrator/src/agents/researchPrompt.ts`) also requires: inline `[N]` citation or an explicit "(estimated)" marker for every quantified claim in prose; one `sourceAnnotations` entry per source classifying it into exactly one `sourceType`; and checking recommendations for material overlap before finalizing, merging them or explicitly distinguishing them rather than listing near-duplicates.
 - `formatResearchMessages(taskTitle, result)` in `packages/orchestrator/src/agents/researchFormat.ts` is a pure function that turns this output into one or more Telegram message strings, each ≤ 4096 characters (Telegram's hard limit), labelled `(Part i/N)` only when more than one message is produced, resolving `supportingSourceIndexes` back to real URLs for display. `researchLoop` queues one outbox row per chunk (`task:{id}:completed:{i}`).
 
+### Technical comparison mode
+
+Everything above is `mode: 'commercial'` — the `ResearchOutput` shape. Technical-comparison requests (library/framework/API/tool decisions) instead produce a structurally distinct `mode: 'technical'` shape (`TechnicalResearchOutput`), never the commercial one with fields nulled out:
+
+```typescript
+{
+  mode: 'technical'
+  executiveSummary: string
+  primaryRecommendation: TechnicalOption   // exactly one
+  alternative: TechnicalOption             // exactly one
+  keyTradeoffs: string[]
+  implementationNote: string                // how primaryRecommendation fits the user's stated stack
+  notRecommended: Array<{ name: string; reason: string; supportingSourceIndexes: number[] }>
+  assumptionsAndCaveats: string[]
+  sources: Array<{ url: string; title: string; relevantExcerpt: string; sourceType: ... }>
+}
+
+// TechnicalOption:
+{
+  name: string
+  whyThisFits: string
+  keyCapabilities: string[]
+  licensingNote: string | null   // the actual stated license; null only when genuinely not applicable
+  evidenceStrength: 'high' | 'medium' | 'low' | 'estimate_only'
+  supportingSourceIndexes: number[]
+}
+```
+
+No `pricingBasis`, `roiModel`, `targetCustomer`, `setupPriceRangeGbp`, `monthlyRetainerRangeGbp`, `fastestOfferToLaunch`, or `sourceGeographyNote` field exists anywhere in this shape — commercial framing is structurally impossible to inject into a technical comparison, not just left null by convention.
+
+- **Detection:** `classifyTask` (`packages/orchestrator/src/agents/classify.ts`) sets `isTechnicalComparison: boolean` on its classification output. Since `tasks.taskType` is a real Postgres enum (adding a value needs a migration), `classifyLoop` (`packages/orchestrator/src/loop.ts`) instead appends a shared `TECHNICAL_COMPARISON_MARKER` constant (`packages/shared/src/outbox.ts`, same pattern as `CLARIFICATION_MARKER`) to the persisted `constraints[]` array when true. `research.ts` reads the marker, strips it before building the prompt, and branches on it to select `buildTechnicalResearchPrompt()`/`technicalResearchModelOutputSchema` instead of the commercial equivalents — the model never sees the marker.
+- **Source authority:** the technical prompt (`buildTechnicalResearchPrompt` in `researchPrompt.ts`) instructs official documentation/GitHub/licensing pages to outrank blogs/Reddit/videos for factual claims, and requires an explicit source citation for any rendering/performance/licensing/capability claim. The Firecrawl search query itself is also biased toward `"... official documentation GitHub license"` for technical requests. In practice a single search query can't guarantee surfacing each candidate's own official docs page (which library will even be a candidate isn't known until after research reasoning) — when official sources aren't available, the model is required to say so honestly in `assumptionsAndCaveats` rather than cite a blog as if it were authoritative. A fuller fix would need a second, candidate-specific search pass — out of scope for this change.
+- **Grounding:** the prompt prohibits inventing a rendering technology, license, capability, or performance claim not directly stated in the source material, and prohibits generalizing the user's stated product/use case to a more common cousin of the same category (e.g. treating a trading-journal analytics tool as a live-market trading terminal just because both involve charts).
+- `formatResearchMessages` renders technical mode distinctly and more compactly than commercial mode: primary/alternative blocks (name, evidence, fit, capabilities, licensing, sources), key trade-offs, an implementation note, and a not-recommended list — reusing the same `renderSource`/`sourceTypeLabel`/`evidenceStrengthLabel` helpers as commercial mode.
+
 ---
 
 ## runAgent Wrapper Contract

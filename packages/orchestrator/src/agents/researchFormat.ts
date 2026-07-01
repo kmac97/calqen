@@ -1,4 +1,4 @@
-import type { ResearchOutput, ResearchRecommendation, RoiModel } from '@calqen/shared'
+import type { ResearchOutput, ResearchRecommendation, RoiModel, ResearchResult, TechnicalOption, TechnicalResearchOutput } from '@calqen/shared'
 
 export const TELEGRAM_MAX_MESSAGE_LENGTH = 4096
 
@@ -95,6 +95,43 @@ function renderSource(source: ResearchOutput['sources'][number], isFirst: boolea
   return isFirst ? `📚 Sources:\n${body}` : body
 }
 
+// Concise by design — no evidence-strength/pricing verbosity beyond what a stack decision needs.
+function renderTechnicalOption(label: string, opt: TechnicalOption, sources: ResearchOutput['sources']): string {
+  const lines = [
+    `${label}: ${opt.name}`,
+    evidenceStrengthLabel(opt.evidenceStrength),
+    opt.whyThisFits,
+    `Capabilities: ${opt.keyCapabilities.length ? opt.keyCapabilities.join(', ') : '—'}`,
+  ]
+  if (opt.licensingNote !== null) lines.push(`License: ${opt.licensingNote}`)
+  const urls = opt.supportingSourceIndexes.map((i) => sources[i]?.url).filter((u): u is string => u !== undefined)
+  if (urls.length) lines.push(`Sources: ${urls.join(', ')}`)
+  return lines.join('\n')
+}
+
+function buildTechnicalBlocks(taskTitle: string, result: TechnicalResearchOutput): string[] {
+  const blocks: string[] = [`✅ Done — ${taskTitle}\n\n${result.executiveSummary}`]
+
+  blocks.push(renderTechnicalOption('✅ Recommended', result.primaryRecommendation, result.sources))
+  blocks.push(renderTechnicalOption('🔁 Alternative', result.alternative, result.sources))
+
+  if (result.keyTradeoffs.length) blocks.push(`⚖️ Key trade-offs:\n${result.keyTradeoffs.map((t) => `• ${t}`).join('\n')}`)
+
+  blocks.push(`🛠️ Implementation: ${result.implementationNote}`)
+
+  if (result.notRecommended.length) {
+    blocks.push(`🚫 Not recommended:\n${result.notRecommended.map((n) => `• ${n.name} — ${n.reason}`).join('\n')}`)
+  }
+
+  if (result.assumptionsAndCaveats.length) {
+    blocks.push(`⚠️ Assumptions & caveats:\n${result.assumptionsAndCaveats.map((a) => `• ${a}`).join('\n')}`)
+  }
+
+  result.sources.forEach((source, i) => blocks.push(renderSource(source, i === 0)))
+
+  return blocks
+}
+
 function buildBlocks(taskTitle: string, result: ResearchOutput): string[] {
   const blocks: string[] = [`✅ Done — ${taskTitle}\n\n${result.executiveSummary}\n\n🌍 ${result.sourceGeographyNote}`]
 
@@ -160,8 +197,9 @@ function packBlocks(blocks: string[]): string[] {
   return messages
 }
 
-export function formatResearchMessages(taskTitle: string, result: ResearchOutput): string[] {
-  const messages = packBlocks(buildBlocks(taskTitle, result))
+export function formatResearchMessages(taskTitle: string, result: ResearchResult): string[] {
+  const blocks = result.mode === 'technical' ? buildTechnicalBlocks(taskTitle, result) : buildBlocks(taskTitle, result)
+  const messages = packBlocks(blocks)
   if (messages.length <= 1) return messages
   return messages.map((msg, i) => `(Part ${i + 1}/${messages.length}) ${msg}`)
 }

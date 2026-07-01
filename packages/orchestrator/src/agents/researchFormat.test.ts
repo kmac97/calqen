@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import type { ResearchOutput, ResearchRecommendation, RoiModel } from '@calqen/shared'
+import type { ResearchOutput, ResearchRecommendation, RoiModel, TechnicalOption, TechnicalResearchOutput } from '@calqen/shared'
 import { formatResearchMessages, TELEGRAM_MAX_MESSAGE_LENGTH } from './researchFormat.js'
 
 function roiModel(overrides: Partial<NonNullable<RoiModel>> = {}): NonNullable<RoiModel> {
@@ -36,6 +36,7 @@ function recommendation(overrides: Partial<ResearchRecommendation> = {}): Resear
 
 function researchOutput(overrides: Partial<ResearchOutput> = {}): ResearchOutput {
   return {
+    mode: 'commercial',
     executiveSummary: 'Three viable offers found for solo trades businesses.',
     sourceGeographyNote: 'All sources are UK trade/industry sites.',
     recommendations: [recommendation()],
@@ -253,5 +254,94 @@ describe('formatResearchMessages', () => {
     const messages = formatResearchMessages('T', result)
     expect(messages.length).toBeGreaterThan(1)
     for (const msg of messages) expect(msg.length).toBeLessThanOrEqual(TELEGRAM_MAX_MESSAGE_LENGTH)
+  })
+})
+
+// Thesis chart-library case: technical comparison, real-time trading-journal analytics charts
+// (not a live-market trading terminal) — regression fixture for the six originally-reported problems.
+function technicalOption(overrides: Partial<TechnicalOption> = {}): TechnicalOption {
+  return {
+    name: 'Lightweight Charts',
+    whyThisFits: 'Canvas-based, purpose-built for financial time-series in trading-journal analytics dashboards.',
+    keyCapabilities: ['candlestick series', 'time-scale scrolling'],
+    licensingNote: 'Apache-2.0',
+    evidenceStrength: 'high',
+    supportingSourceIndexes: [0],
+    ...overrides,
+  }
+}
+
+function technicalResearchOutput(overrides: Partial<TechnicalResearchOutput> = {}): TechnicalResearchOutput {
+  return {
+    mode: 'technical',
+    executiveSummary: 'For Thesis\'s trading-journal analytics charts, Lightweight Charts is the strongest fit.',
+    primaryRecommendation: technicalOption(),
+    alternative: technicalOption({ name: 'amCharts 5', licensingNote: 'Commercial (free tier available)', supportingSourceIndexes: [1] }),
+    keyTradeoffs: ['Lightweight Charts is smaller and canvas-only; amCharts 5 has richer theming but a larger bundle.'],
+    implementationNote: 'Drop into the existing React chart panel; no build changes needed.',
+    notRecommended: [{ name: 'D3.js', reason: 'Too low-level for the required timeline without significant custom code.', supportingSourceIndexes: [0] }],
+    assumptionsAndCaveats: ['Bundle size figures were not quoted in source excerpts — confirm by installing.'],
+    sources: [
+      { url: 'https://tradingview.github.io/lightweight-charts/', title: 'Lightweight Charts docs', relevantExcerpt: 'Renders using HTML5 Canvas.', sourceType: 'official_vendor' },
+      { url: 'https://www.amcharts.com/docs/v5/', title: 'amCharts 5 docs', relevantExcerpt: 'Licensing and capability overview.', sourceType: 'official_vendor' },
+    ],
+    ...overrides,
+  }
+}
+
+describe('formatResearchMessages (technical mode)', () => {
+  it('renders no geographic/local-market disclaimer line', () => {
+    const msg = formatResearchMessages('Thesis charting libraries', technicalResearchOutput())[0]!
+    expect(msg).not.toMatch(/🌍/)
+    expect(msg).not.toMatch(/UK|US-based|geographic/i)
+  })
+
+  it('renders no commercial pricing/ROI fields anywhere in output', () => {
+    const msg = formatResearchMessages('T', technicalResearchOutput())[0]!
+    expect(msg).not.toMatch(/Setup price|Monthly retainer|Pricing basis|ROI|Ease to sell|Profit potential/i)
+  })
+
+  it('renders exactly one primary recommendation and one alternative', () => {
+    const msg = formatResearchMessages('T', technicalResearchOutput())[0]!
+    expect(msg).toContain('✅ Recommended: Lightweight Charts')
+    expect(msg).toContain('🔁 Alternative: amCharts 5')
+  })
+
+  it('renders a not-recommended section for rejected options', () => {
+    const msg = formatResearchMessages('T', technicalResearchOutput())[0]!
+    expect(msg).toContain('🚫 Not recommended')
+    expect(msg).toContain('D3.js')
+  })
+
+  it('renders licensing notes for both options', () => {
+    const msg = formatResearchMessages('T', technicalResearchOutput())[0]!
+    expect(msg).toContain('License: Apache-2.0')
+    expect(msg).toContain('License: Commercial (free tier available)')
+  })
+
+  it('renders the implementation note', () => {
+    const msg = formatResearchMessages('T', technicalResearchOutput())[0]!
+    expect(msg).toContain('🛠️ Implementation:')
+    expect(msg).toContain('Drop into the existing React chart panel')
+  })
+
+  it('does not alter or invent facts in whyThisFits/keyCapabilities text (renders verbatim, no rendering-technology claims added)', () => {
+    const msg = formatResearchMessages('T', technicalResearchOutput())[0]!
+    expect(msg).toContain('Canvas-based, purpose-built for financial time-series in trading-journal analytics dashboards.')
+    expect(msg).not.toMatch(/WebGL/)
+  })
+
+  it('never prints the literal string "null" for a null licensingNote', () => {
+    const result = technicalResearchOutput({ primaryRecommendation: technicalOption({ licensingNote: null }) })
+    const msg = formatResearchMessages('T', result)[0]!
+    expect(msg).not.toMatch(/\bnull\b/)
+  })
+
+  it('omits key-trade-offs and not-recommended blocks when empty, without crashing', () => {
+    const result = technicalResearchOutput({ keyTradeoffs: [], notRecommended: [] })
+    const messages = formatResearchMessages('T', result)
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).not.toContain('⚖️ Key trade-offs')
+    expect(messages[0]).not.toContain('🚫 Not recommended')
   })
 })

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildResearchPrompt, type ResearchPromptContext } from './researchPrompt.js'
+import { buildResearchPrompt, buildTechnicalResearchPrompt, type ResearchPromptContext } from './researchPrompt.js'
 
 function context(overrides: Partial<ResearchPromptContext> = {}): ResearchPromptContext {
   return {
@@ -72,6 +72,78 @@ describe('buildResearchPrompt', () => {
 
   it('handles empty constraints/acceptanceCriteria without crashing', () => {
     const result = buildResearchPrompt(context({ constraints: [], acceptanceCriteria: [] }), '')
+    expect(result).toContain('(none)')
+  })
+})
+
+describe('buildTechnicalResearchPrompt', () => {
+  const thesisContext: ResearchPromptContext = {
+    goal: 'Pick a charting library for Thesis',
+    rawInput: 'Compare the best charting libraries for Thesis. Real-time trading-journal analytics charts, not a live-market trading terminal.',
+    constraints: ['Must fit the existing React stack'],
+    acceptanceCriteria: ['Primary recommendation and one alternative'],
+  }
+  const prompt = buildTechnicalResearchPrompt(thesisContext, '[0] URL: https://tradingview.github.io/lightweight-charts/\nTitle: Lightweight Charts docs\nExcerpt: Official documentation.')
+
+  it('includes the verbatim rawInput, goal, constraints, and acceptance criteria', () => {
+    expect(prompt).toContain(thesisContext.rawInput)
+    expect(prompt).toContain(thesisContext.goal)
+    expect(prompt).toContain('Must fit the existing React stack')
+    expect(prompt).toContain('Primary recommendation and one alternative')
+  })
+
+  it('instructs against generalizing the stated use case to a more common cousin of the product category', () => {
+    expect(prompt).toMatch(/do not generalize/i)
+    expect(prompt).toMatch(/trading-journal analytics/i)
+    expect(prompt).toMatch(/live-market trading terminal/i)
+  })
+
+  it('prohibits geographic/regional/local-market disclaimers', () => {
+    expect(prompt).toMatch(/do not include any geographic|no geographic/i)
+    expect(prompt).not.toContain('sourceGeographyNote')
+  })
+
+  it('sets an official-source-priority hierarchy for factual technical claims', () => {
+    expect(prompt).toMatch(/official documentation/i)
+    expect(prompt).toMatch(/official github/i)
+    expect(prompt).toMatch(/licensing pages?/i)
+    expect(prompt).toMatch(/blogs, reddit, videos/i)
+    expect(prompt).toMatch(/secondary context only/i)
+  })
+
+  it('prohibits inventing rendering technology, licensing, capability, or performance claims', () => {
+    expect(prompt).toMatch(/never invent or assume a rendering technology, license, capability, or performance claim/i)
+  })
+
+  it('requires exactly one primaryRecommendation and one alternative, plus notRecommended for rejected options', () => {
+    expect(prompt).toContain('primaryRecommendation')
+    expect(prompt).toContain('alternative')
+    expect(prompt).toContain('notRecommended')
+    expect(prompt).toMatch(/exactly one primaryRecommendation.*exactly one alternative/i)
+  })
+
+  it('requires an implementation note tying the recommendation to the user\'s stated stack', () => {
+    expect(prompt).toContain('implementationNote')
+    expect(prompt).toMatch(/stated stack/i)
+  })
+
+  it('requires a real licensing note, never a guessed license', () => {
+    expect(prompt).toContain('licensingNote')
+    expect(prompt).toMatch(/never guess a license/i)
+  })
+
+  it('grades evidenceStrength by official-source backing specifically', () => {
+    expect(prompt).toMatch(/evidenceStrength/)
+    expect(prompt).toMatch(/official docs\/repo\/registry/i)
+  })
+
+  it('still requires supportingSourceIndexes to reference indexes, never raw URLs', () => {
+    expect(prompt).toMatch(/supportingSourceIndexes/)
+    expect(prompt).toMatch(/never write out the URL itself/i)
+  })
+
+  it('handles empty constraints/acceptanceCriteria without crashing', () => {
+    const result = buildTechnicalResearchPrompt({ ...thesisContext, constraints: [], acceptanceCriteria: [] }, '')
     expect(result).toContain('(none)')
   })
 })

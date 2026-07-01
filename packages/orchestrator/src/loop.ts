@@ -12,6 +12,7 @@ import {
   redactSecretsDeep,
   queueMessage,
   CLARIFICATION_MARKER,
+  TECHNICAL_COMPARISON_MARKER,
 } from '@calqen/shared'
 import { classifyTask, synthesisePlan } from './agents/classify.js'
 import { architectTask } from './agents/architect.js'
@@ -217,6 +218,13 @@ export async function classifyLoop() {
         dedupeKey: `task:${task.id}:clarification:${round}`,
       })
     } else {
+      // tasks.taskType is a real Postgres enum (no free 'technical_comparison' value without a
+      // migration) — thread the classifier's technical/commercial judgement through the existing
+      // constraints[] column instead, via a shared marker (same pattern as CLARIFICATION_MARKER).
+      const constraints = result.isTechnicalComparison
+        ? [...result.constraints, TECHNICAL_COMPARISON_MARKER]
+        : result.constraints
+
       const updated = await db.update(tasks).set({
         status: 'classified',
         title: result.title,
@@ -224,7 +232,7 @@ export async function classifyLoop() {
         taskType: result.taskType,
         executionTarget,
         projectId: projectId ?? null,
-        constraints: result.constraints,
+        constraints,
         acceptanceCriteria: result.acceptanceCriteria,
         riskLevel: result.riskLevel,
         requiresApproval: result.requiresApproval,
@@ -361,7 +369,9 @@ export async function researchLoop() {
         taskId: task.id,
         type: 'research',
         content: redactSecrets(JSON.stringify(result)),
-        metadata: { sources: result.sources.length, recommendations: result.recommendations.length },
+        metadata: result.mode === 'commercial'
+          ? { mode: result.mode, sources: result.sources.length, recommendations: result.recommendations.length }
+          : { mode: result.mode, sources: result.sources.length },
       })
 
       await tx.insert(auditEvents).values({ taskId: task.id, eventType: 'task.status_changed', payload: { from: 'in_progress', to: 'completed' } })

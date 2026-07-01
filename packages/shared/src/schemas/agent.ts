@@ -92,6 +92,10 @@ export const researchRecommendationSchema = z
 // Unrefined base shape, kept separate so researchModelOutputSchema below can .omit() sources —
 // z.object().refine() returns a ZodEffects wrapper that .omit() isn't available on.
 const researchOutputObjectSchema = z.object({
+  // Discriminates ResearchOutput from TechnicalResearchOutput for callers that receive the
+  // ResearchResult union (loop.ts, researchFormat.ts) — not a schema-level discriminatedUnion
+  // since both final schemas are .refine()-wrapped ZodEffects, which don't compose into one.
+  mode: z.literal('commercial'),
   executiveSummary: z.string(),
   // Explicit statement of what the source set actually covers geographically, so UK/regional
   // relevance is never silently implied when the evidence is really US/global.
@@ -134,3 +138,66 @@ export type ResearchOutput = z.infer<typeof researchOutputSchema>
 export type RoiModel = NonNullable<ResearchRecommendation['roiModel']>
 export type SourceAnnotation = z.infer<typeof sourceAnnotationSchema>
 export type ResearchModelOutput = z.infer<typeof researchModelOutputSchema>
+
+// Technical-comparison research (libraries/frameworks/APIs/tools) — deliberately a separate
+// shape from the commercial schema above, not just the same fields nulled out. No pricing, ROI,
+// target-customer, fastest-to-launch, or geography fields exist here at all: a technical
+// comparison structurally cannot be given commercial framing, rather than relying on the model to
+// leave those fields null.
+export const technicalOptionSchema = z.object({
+  name: z.string(),
+  // Why this option fits (primaryRecommendation/alternative) — same field, contextual meaning.
+  whyThisFits: z.string(),
+  keyCapabilities: z.array(z.string()),
+  // The actual stated license (e.g. "MIT", "Apache-2.0", "commercial") when known; null only when
+  // genuinely not applicable — never a guess.
+  licensingNote: z.string().nullable(),
+  evidenceStrength: evidenceStrengthSchema,
+  supportingSourceIndexes: z.array(z.number().int().min(0)),
+})
+
+export const technicalNotRecommendedSchema = z.object({
+  name: z.string(),
+  reason: z.string(),
+  supportingSourceIndexes: z.array(z.number().int().min(0)),
+})
+
+const technicalResearchObjectSchema = z.object({
+  mode: z.literal('technical'),
+  executiveSummary: z.string(),
+  primaryRecommendation: technicalOptionSchema,
+  alternative: technicalOptionSchema,
+  keyTradeoffs: z.array(z.string()),
+  // How the primary recommendation fits the user's stated stack/scale.
+  implementationNote: z.string(),
+  notRecommended: z.array(technicalNotRecommendedSchema),
+  assumptionsAndCaveats: z.array(z.string()),
+  sources: z.array(researchSourceSchema),
+})
+
+function allTechnicalSourceIndexes(out: z.infer<typeof technicalResearchObjectSchema>): number[] {
+  return [
+    ...out.primaryRecommendation.supportingSourceIndexes,
+    ...out.alternative.supportingSourceIndexes,
+    ...out.notRecommended.flatMap((n) => n.supportingSourceIndexes),
+  ]
+}
+
+export const technicalResearchOutputSchema = technicalResearchObjectSchema.refine(
+  (out) => allTechnicalSourceIndexes(out).every((i) => i < out.sources.length),
+  {
+    message: 'every supportingSourceIndexes entry must be a valid index into sources[]',
+    path: ['primaryRecommendation'],
+  },
+)
+
+export const technicalResearchModelOutputSchema = technicalResearchObjectSchema.omit({ sources: true }).extend({
+  sourceAnnotations: z.array(sourceAnnotationSchema),
+})
+
+export type TechnicalOption = z.infer<typeof technicalOptionSchema>
+export type TechnicalResearchOutput = z.infer<typeof technicalResearchOutputSchema>
+export type TechnicalResearchModelOutput = z.infer<typeof technicalResearchModelOutputSchema>
+
+// What researchTask() actually returns — callers (loop.ts, researchFormat.ts) branch on `.mode`.
+export type ResearchResult = ResearchOutput | TechnicalResearchOutput

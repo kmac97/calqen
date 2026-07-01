@@ -8,6 +8,14 @@ type DBOrTx = DB | DBTransaction
 // number for dedupe keys (packages/orchestrator/src/loop.ts) — shared here so the two stay in sync.
 export const CLARIFICATION_MARKER = '\n[clarification]: '
 
+// Appended to tasks.constraints by classifyLoop when the classifier detects a technical
+// comparison request (packages/orchestrator/src/loop.ts), and read back out by research.ts to
+// select technical vs commercial research mode. tasks.taskType is a real Postgres enum, so adding
+// a value there would need a migration — reusing the existing constraints[] text column with a
+// shared marker constant avoids that, same pattern as CLARIFICATION_MARKER above. Stripped from
+// the constraints list before it reaches the research prompt, so the model never sees it.
+export const TECHNICAL_COMPARISON_MARKER = '__calqen_internal:technical_comparison__'
+
 export interface OutboxParams {
   chatId: number
   taskId?: string | null

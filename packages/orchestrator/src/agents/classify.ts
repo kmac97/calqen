@@ -37,8 +37,11 @@ Respond with valid JSON only:
   "constraints": ["..."],
   "acceptanceCriteria": ["..."],
   "riskLevel": "low" | "medium" | "high",
-  "requiresApproval": true | false
-}`
+  "requiresApproval": true | false,
+  "isTechnicalComparison": true | false
+}
+
+isTechnicalComparison is true only when the request is fundamentally about comparing or choosing between software libraries, frameworks, APIs, or technical tools for a stack/implementation decision (e.g. "which charting library should I use"). It is false for commercial offer/business-idea research, current-events or regulatory research, and any non-technical-comparison request — including when taskType is not "research" at all.`
 
       const msg = await client.messages.create({
         model: FAST_MODEL,
