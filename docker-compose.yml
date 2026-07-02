@@ -7,6 +7,14 @@
 #     never in Docker.
 #   - Any secret values — `env_file: .env` points at a server-side .env populated from Doppler at
 #     deploy time; this file itself contains no secrets and is safe to commit.
+#
+# Networking (see docs/deployment.md "Networking"):
+#   - `api` publishes only to 127.0.0.1:3001 on the host — Nginx (configured on the VPS,
+#     outside this repo) is the sole public entry point and reverse-proxies to it.
+#   - Containers reach the API over the compose network's internal DNS (`http://api:3001`),
+#     never through the host's published port.
+#   - The Windows Runner is outside this compose network entirely and calls the API through
+#     Nginx's public URL (https://calqen.duckdns.org), never http://api:3001.
 
 services:
   api:
@@ -17,7 +25,8 @@ services:
         GIT_SHA: ${GIT_SHA:-}
     env_file: .env
     ports:
-      - '3001:3001'
+      # Loopback-only — Nginx is the sole public entry point, proxying to this port from the host.
+      - '127.0.0.1:3001:3001'
     restart: unless-stopped
     healthcheck:
       test: ['CMD', 'curl', '-f', 'http://localhost:3001/api/health']
@@ -33,6 +42,11 @@ services:
       args:
         GIT_SHA: ${GIT_SHA:-}
     env_file: .env
+    environment:
+      # Inside the bot container, localhost is the bot container itself, not the api container —
+      # override the host-facing default from .env with the compose network's service DNS name.
+      # (orchestrator never calls the API — it talks to Postgres directly — so it needs no override.)
+      - CALQEN_API_URL=http://api:3001
     restart: unless-stopped
     depends_on:
       - api

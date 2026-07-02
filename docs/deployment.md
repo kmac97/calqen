@@ -49,6 +49,18 @@ NODE_ENV, CALQEN_API_URL, PORT
 
 The Runner (Windows PC) only needs `RUNNER_REGISTRATION_SECRET`, `CALQEN_API_URL`, and its own `RUNNER_*` tuning variables — it is not part of the VPS deployment.
 
+## Networking
+
+`CALQEN_API_URL` is not a single value — it depends on who's calling:
+
+| Caller | `CALQEN_API_URL` | Why |
+|---|---|---|
+| Local dev (bot/runner running directly on host) | `http://localhost:3001` | Default in `.env.example`, all services on the same machine |
+| VPS Docker services calling the API internally (`bot`) | `http://api:3001` | Set via `docker-compose.yml`'s `bot.environment:`, not `.env` — inside the `bot` container, `localhost` means the bot container itself, not the `api` container. Compose's built-in DNS resolves the service name `api` to the right container on the internal network. `orchestrator` never calls the API (it talks to Postgres directly), so it needs no override. |
+| Windows Runner (production) | `https://calqen.duckdns.org` | The Runner is outside the compose network entirely — it must go through the public URL, never the internal `http://api:3001` |
+
+The `api` service publishes to `127.0.0.1:3001` on the VPS host — not `0.0.0.0` — so it is not reachable from the public internet directly. Nginx (configured on the VPS, outside this repo) is the sole public entry point: it terminates TLS for `https://calqen.duckdns.org` and reverse-proxies to `127.0.0.1:3001`. `bot` and `orchestrator` reach `api` over the compose-internal network regardless of the host port binding, so loopback-only publishing doesn't affect them.
+
 ## Build, Start, Update, Rollback
 
 ```bash
@@ -83,6 +95,7 @@ It is public/unauthenticated (see `docs/security.md`'s API Authentication table)
 | Symptom | Check |
 |---|---|
 | Container exits immediately after start | `docker compose logs <service>` — look for the `[env] <service> is missing required environment variables: ...` fail-fast line |
-| `api` healthcheck failing | `curl -f http://localhost:3001/api/health` directly on the host |
+| `api` healthcheck failing | `curl -f http://localhost:3001/api/health` directly on the VPS host — `api` publishes to `127.0.0.1` only, so this must be run on the host itself, not remotely |
+| `bot` can't reach the API in Docker but works in local dev | Confirm `docker-compose.yml`'s `bot.environment` still overrides `CALQEN_API_URL` to `http://api:3001` — `bot`'s `.env` value (`http://localhost:3001`) is correct for local dev but resolves to the `bot` container itself inside Docker |
 | Container won't rebuild after a code change | Confirm `GIT_SHA` build arg was passed and the image wasn't served from a stale layer cache |
 | Service doesn't stop cleanly on `docker compose down` | Confirm the container logs the one-line `[<service>] shutting down` message — if absent, the process was killed before its `SIGTERM` handler ran (default compose stop timeout is 10s) |
